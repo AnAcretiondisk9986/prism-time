@@ -1,7 +1,7 @@
 [package]
 name = "prism-time"
-version = "0.2.0-dev"
-description = "PrismTime Windows screen time and usage period monitor"
+version = "0.3.0"
+description = "PrismTime Windows screen time, browser insights and sync monitor"
 authors = ["PrismTime"]
 edition = "2021"
 
@@ -38,7 +38,14 @@ windows = { version = "0.62", features = [
   "Win32_System_Diagnostics_ToolHelp",
   "Win32_Storage_FileSystem",
   "Win32_Graphics_Gdi",
+  "Win32_Networking_WinHttp",
 ] }
 
 [patch.crates-io]
 tauri-winres = { path = "vendor/tauri-winres" }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = 3

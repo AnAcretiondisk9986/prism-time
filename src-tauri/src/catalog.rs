@@ -1,4 +1,4 @@
-use crate::models::{AppCategory, AppMetadata, AppOverride};
+use crate::models::{AppCategory, AppMetadata, AppOverride, CustomAppRule};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -1801,6 +1801,14 @@ pub fn slugify_app_id(raw: &str) -> String {
     }
 }
 
+pub fn normalize_process_token(raw: &str) -> String {
+    let trimmed = raw.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    extract_process_stem(trimmed)
+}
+
 pub fn apply_override(meta: &mut AppMetadata, ov: &AppOverride) {
     if let Some(name) = &ov.display_name {
         let trimmed = name.trim();
@@ -1819,6 +1827,206 @@ pub fn apply_override(meta: &mut AppMetadata, ov: &AppOverride) {
     }
     if let Some(ignored) = ov.ignored {
         meta.ignored = ignored;
+    }
+    for proc_raw in &ov.extra_process_names {
+        let norm = normalize_process_token(proc_raw);
+        if !norm.is_empty()
+            && !meta
+                .process_names
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(&norm))
+        {
+            meta.process_names.push(norm);
+        }
+    }
+    if let Some(icon) = &ov.custom_icon_data_url {
+        let trimmed = icon.trim();
+        if trimmed.starts_with("data:image/") {
+            meta.icon_data_url = Some(trimmed.to_string());
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedAppContext {
+    pub meta: AppMetadata,
+    pub treat_as_browser: Option<bool>,
+    #[allow(dead_code)]
+    pub idle_multiplier: Option<u32>,
+}
+
+pub fn match_custom_rule<'a>(
+    exe_stem_lower: &str,
+    exe_path_lower: &str,
+    window_title_lower: &str,
+    rules: &'a [CustomAppRule],
+) -> Option<&'a CustomAppRule> {
+    rules.iter().find(|rule| {
+        let proc_hit = !exe_stem_lower.is_empty()
+            && rule.process_names.iter().any(|p| {
+                let norm = normalize_process_token(p).to_lowercase();
+                !norm.is_empty() && norm == exe_stem_lower
+            });
+        let path_hit = !exe_path_lower.is_empty()
+            && rule.path_contains.iter().any(|kw| {
+                let k = kw.trim().to_lowercase();
+                !k.is_empty() && exe_path_lower.contains(&k)
+            });
+        let title_hit = !window_title_lower.is_empty()
+            && rule.title_contains.iter().any(|kw| {
+                let k = kw.trim().to_lowercase();
+                !k.is_empty() && window_title_lower.contains(&k)
+            });
+        proc_hit || path_hit || title_hit
+    })
+}
+
+pub fn resolve_observed_app_with_custom(
+    exe_path: &str,
+    pe_product: Option<&str>,
+    pe_description: Option<&str>,
+    pe_company: Option<&str>,
+    window_title: Option<&str>,
+    catalog: &HashMap<String, AppMetadata>,
+    overrides: &HashMap<String, AppOverride>,
+    custom_rules: &[CustomAppRule],
+) -> ResolvedAppContext {
+    let process_stem = extract_process_stem(exe_path);
+    let exe_stem_lower = process_stem.to_lowercase();
+    let exe_path_lower = exe_path.to_lowercase();
+    let title_lower = window_title.unwrap_or_default().to_lowercase();
+
+    // 0a. Priority #0: Explicit User Custom Process/Software Rule
+    if let Some(rule) = match_custom_rule(&exe_stem_lower, &exe_path_lower, &title_lower, custom_rules) {
+        if let Some(target_id) = rule.merge_into_app_id.as_deref().filter(|s| !s.trim().is_empty()) {
+            if let Some(target) = catalog.get(target_id) {
+                let mut merged = target.clone();
+                if let Some(ov) = overrides.get(&merged.app_id) {
+                    apply_override(&mut merged, ov);
+                }
+                if rule.ignored {
+                    merged.ignored = true;
+                }
+                return ResolvedAppContext {
+                    meta: merged,
+                    treat_as_browser: Some(rule.treat_as_browser),
+                    idle_multiplier: Some(rule.idle_multiplier),
+                };
+            }
+        }
+
+        let mut meta = catalog
+            .get(&rule.app_id)
+            .cloned()
+            .unwrap_or_else(|| AppMetadata {
+                app_id: rule.app_id.clone(),
+                display_name: rule.display_name.clone(),
+                category: rule.category,
+                description: if rule.description.trim().is_empty() {
+                    format!("自定义进程规则 · {}", rule.category.label())
+                } else {
+                    rule.description.clone()
+                },
+                publisher: if rule.publisher.trim().is_empty() {
+                    "用户自定义".to_string()
+                } else {
+                    rule.publisher.clone()
+                },
+                icon_data_url: rule.custom_icon_data_url.clone(),
+                exe_paths: Vec::new(),
+                process_names: rule
+                    .process_names
+                    .iter()
+                    .map(|p| normalize_process_token(p))
+                    .filter(|p| !p.is_empty())
+                    .collect(),
+                source: "custom".to_string(),
+                installed: true,
+                ignored: rule.ignored,
+                last_seen_ts: None,
+            });
+
+        meta.display_name = rule.display_name.clone();
+        meta.category = rule.category;
+        if !rule.description.trim().is_empty() {
+            meta.description = rule.description.clone();
+        }
+        if !rule.publisher.trim().is_empty() {
+            meta.publisher = rule.publisher.clone();
+        }
+        if let Some(ref ic) = rule.custom_icon_data_url {
+            if ic.starts_with("data:image/") {
+                meta.icon_data_url = Some(ic.clone());
+            }
+        }
+        meta.ignored = rule.ignored;
+        meta.source = "custom".to_string();
+
+        return ResolvedAppContext {
+            meta,
+            treat_as_browser: Some(rule.treat_as_browser),
+            idle_multiplier: Some(rule.idle_multiplier),
+        };
+    }
+
+    // 0b. Check if any AppOverride explicitly binds this process name via extra_process_names
+    if !exe_stem_lower.is_empty() {
+        if let Some((bound_app_id, bound_ov)) = overrides.iter().find(|(_, ov)| {
+            ov.extra_process_names.iter().any(|p| {
+                let norm = normalize_process_token(p).to_lowercase();
+                !norm.is_empty() && norm == exe_stem_lower
+            })
+        }) {
+            if let Some(existing) = catalog.get(bound_app_id) {
+                let mut meta = existing.clone();
+                apply_override(&mut meta, bound_ov);
+                return ResolvedAppContext {
+                    meta,
+                    treat_as_browser: bound_ov.treat_as_browser,
+                    idle_multiplier: bound_ov.idle_multiplier,
+                };
+            }
+        }
+    }
+
+    // 1..3 Standard built-in / registry / process fallback pipeline
+    let mut meta = resolve_observed_app(
+        exe_path,
+        pe_product,
+        pe_description,
+        pe_company,
+        window_title,
+        catalog,
+    );
+
+    let mut treat_as_browser = None;
+    let mut idle_multiplier = None;
+
+    if let Some(ov) = overrides.get(&meta.app_id) {
+        if let Some(target_id) = ov
+            .merge_into_app_id
+            .as_deref()
+            .filter(|s| !s.trim().is_empty() && *s != meta.app_id)
+        {
+            if let Some(target) = catalog.get(target_id) {
+                meta = target.clone();
+                if let Some(target_ov) = overrides.get(&meta.app_id) {
+                    apply_override(&mut meta, target_ov);
+                    treat_as_browser = target_ov.treat_as_browser;
+                    idle_multiplier = target_ov.idle_multiplier;
+                }
+            }
+        } else {
+            apply_override(&mut meta, ov);
+            treat_as_browser = ov.treat_as_browser;
+            idle_multiplier = ov.idle_multiplier;
+        }
+    }
+
+    ResolvedAppContext {
+        meta,
+        treat_as_browser,
+        idle_multiplier,
     }
 }
 
@@ -2109,6 +2317,12 @@ mod tests {
                 category: Some(AppCategory::Utility),
                 description: None,
                 ignored: None,
+                extra_process_names: Vec::new(),
+                idle_multiplier: None,
+                treat_as_browser: None,
+                merge_into_app_id: None,
+                custom_tag: None,
+                custom_icon_data_url: None,
             },
         );
         catalog.insert(edited.app_id.clone(), edited);
@@ -2152,5 +2366,91 @@ mod tests {
         assert_eq!(observed_scanned.display_name, "ct_runner");
         assert_eq!(observed_scanned.process_names, vec!["ct_runner"]);
         assert_eq!(observed_scanned.source, "observed");
+    }
+
+    #[test]
+    fn custom_process_rules_and_extra_aliases_take_top_priority() {
+        let mut catalog = HashMap::new();
+        let mut overrides = HashMap::new();
+        let rules = vec![CustomAppRule {
+            rule_id: "rule-1".to_string(),
+            app_id: "custom.my_browser".to_string(),
+            display_name: "自研浏览器".to_string(),
+            category: AppCategory::Browser,
+            description: "自定义便携浏览器".to_string(),
+            publisher: "个人定制".to_string(),
+            process_names: vec!["MyFork.exe".to_string()],
+            path_contains: vec![],
+            title_contains: vec![],
+            ignored: false,
+            treat_as_browser: true,
+            idle_multiplier: 0,
+            merge_into_app_id: None,
+            custom_tag: Some("主力".to_string()),
+            custom_icon_data_url: None,
+        }];
+
+        let ctx = resolve_observed_app_with_custom(
+            r"D:\Portable\MyFork.exe",
+            None,
+            None,
+            None,
+            Some("GitHub"),
+            &catalog,
+            &overrides,
+            &rules,
+        );
+        assert_eq!(ctx.meta.app_id, "custom.my_browser");
+        assert_eq!(ctx.meta.display_name, "自研浏览器");
+        assert_eq!(ctx.treat_as_browser, Some(true));
+        assert_eq!(ctx.idle_multiplier, Some(0));
+
+        // Extra process alias binding via AppOverride
+        catalog.insert(
+            "google.antigravity".to_string(),
+            AppMetadata {
+                app_id: "google.antigravity".to_string(),
+                display_name: "Antigravity".to_string(),
+                category: AppCategory::Dev,
+                description: "IDE".to_string(),
+                publisher: "Google".to_string(),
+                icon_data_url: None,
+                exe_paths: vec![],
+                process_names: vec!["Antigravity".to_string()],
+                source: "known".to_string(),
+                installed: true,
+                ignored: false,
+                last_seen_ts: None,
+            },
+        );
+        overrides.insert(
+            "google.antigravity".to_string(),
+            AppOverride {
+                app_id: "google.antigravity".to_string(),
+                display_name: None,
+                category: None,
+                description: None,
+                ignored: None,
+                extra_process_names: vec!["ag_helper.exe".to_string()],
+                idle_multiplier: Some(2),
+                treat_as_browser: None,
+                merge_into_app_id: None,
+                custom_tag: None,
+                custom_icon_data_url: None,
+            },
+        );
+
+        let aliased = resolve_observed_app_with_custom(
+            r"D:\Tools\ag_helper.exe",
+            None,
+            None,
+            None,
+            None,
+            &catalog,
+            &overrides,
+            &[],
+        );
+        assert_eq!(aliased.meta.app_id, "google.antigravity");
+        assert_eq!(aliased.idle_multiplier, Some(2));
     }
 }

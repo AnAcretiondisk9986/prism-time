@@ -1,12 +1,14 @@
 use crate::analytics::{build_app_detail, build_dashboard_analytics};
-use crate::catalog::apply_override;
+use crate::catalog::{apply_override, normalize_process_token, slugify_app_id};
 use crate::demo::generate_demo_dataset;
 use crate::models::{
     AppDetailDto, AppMetadata, AppOverride, AppOverrideInput, AppSettings, CatalogAppDto,
-    DashboardAnalyticsDto, ExportResultDto, LiveStatusDto, UsageSession,
+    CustomAppRule, CustomAppRuleInput, DashboardAnalyticsDto, ExportResultDto, LiveStatusDto,
+    SyncStatusDto, UsageSession,
 };
 use crate::scanner::scan_installed_software;
 use crate::storage::Storage;
+use crate::sync;
 use chrono::{Duration, Local, NaiveDate};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -34,6 +36,8 @@ pub struct SharedAppState {
     pub settings: Mutex<AppSettings>,
     pub catalog: Mutex<HashMap<String, AppMetadata>>,
     pub overrides: Mutex<HashMap<String, AppOverride>>,
+    pub custom_rules: Mutex<Vec<CustomAppRule>>,
+    pub sync_status: Mutex<SyncStatusDto>,
     pub runtime: Mutex<RuntimeTrackerState>,
     pub allow_exit: Arc<Mutex<bool>>,
 }
@@ -62,6 +66,58 @@ impl SharedAppState {
         }
         map
     }
+}
+
+pub fn sync_custom_rule_into_catalog(
+    catalog: &mut HashMap<String, AppMetadata>,
+    rule: &CustomAppRule,
+) {
+    let procs: Vec<String> = rule
+        .process_names
+        .iter()
+        .map(|p| normalize_process_token(p))
+        .filter(|p| !p.is_empty())
+        .collect();
+    let entry = catalog
+        .entry(rule.app_id.clone())
+        .or_insert_with(|| AppMetadata {
+            app_id: rule.app_id.clone(),
+            display_name: rule.display_name.clone(),
+            category: rule.category,
+            description: if rule.description.trim().is_empty() {
+                format!("用户自定义规则 · {}", rule.category.label())
+            } else {
+                rule.description.clone()
+            },
+            publisher: if rule.publisher.trim().is_empty() {
+                "用户自定义".to_string()
+            } else {
+                rule.publisher.clone()
+            },
+            icon_data_url: rule.custom_icon_data_url.clone(),
+            exe_paths: Vec::new(),
+            process_names: procs.clone(),
+            source: "custom".to_string(),
+            installed: true,
+            ignored: rule.ignored,
+            last_seen_ts: None,
+        });
+    entry.display_name = rule.display_name.clone();
+    entry.category = rule.category;
+    if !rule.description.trim().is_empty() {
+        entry.description = rule.description.clone();
+    }
+    if !rule.publisher.trim().is_empty() {
+        entry.publisher = rule.publisher.clone();
+    }
+    if let Some(ref ic) = rule.custom_icon_data_url {
+        if ic.starts_with("data:image/") {
+            entry.icon_data_url = Some(ic.clone());
+        }
+    }
+    entry.process_names = procs;
+    entry.ignored = rule.ignored;
+    entry.source = "custom".to_string();
 }
 
 #[cfg(windows)]
@@ -239,7 +295,11 @@ pub fn rescan_local_software(state: State<'_, Arc<SharedAppState>>) -> Vec<Catal
     {
         let mut catalog = state.catalog.lock().unwrap();
         let overrides = state.overrides.lock().unwrap();
+        let custom_rules = state.custom_rules.lock().unwrap();
         scan_installed_software(&mut catalog, true);
+        for rule in custom_rules.iter() {
+            sync_custom_rule_into_catalog(&mut catalog, rule);
+        }
         for (aid, ov) in overrides.iter() {
             if let Some(meta) = catalog.get_mut(aid) {
                 apply_override(meta, ov);
@@ -262,22 +322,32 @@ fn build_catalog_dtos(state: &Arc<SharedAppState>) -> Vec<CatalogAppDto> {
     }
 
     let catalog = state.catalog.lock().unwrap();
+    let overrides = state.overrides.lock().unwrap();
     let mut items: Vec<CatalogAppDto> = catalog
         .values()
-        .map(|m| CatalogAppDto {
-            app_id: m.app_id.clone(),
-            display_name: m.display_name.clone(),
-            category: m.category,
-            description: m.description.clone(),
-            publisher: m.publisher.clone(),
-            icon_data_url: m.icon_data_url.clone(),
-            process_names: m.process_names.clone(),
-            source: m.source.clone(),
-            installed: m.installed,
-            ignored: m.ignored,
-            today_secs: *today_map.get(&m.app_id).unwrap_or(&0),
-            last_seen_ts: m.last_seen_ts,
-            install_hint: m.exe_paths.first().cloned(),
+        .map(|m| {
+            let ov = overrides.get(&m.app_id);
+            CatalogAppDto {
+                app_id: m.app_id.clone(),
+                display_name: m.display_name.clone(),
+                category: m.category,
+                description: m.description.clone(),
+                publisher: m.publisher.clone(),
+                icon_data_url: m.icon_data_url.clone(),
+                process_names: m.process_names.clone(),
+                source: m.source.clone(),
+                installed: m.installed,
+                ignored: m.ignored,
+                today_secs: *today_map.get(&m.app_id).unwrap_or(&0),
+                last_seen_ts: m.last_seen_ts,
+                install_hint: m.exe_paths.first().cloned(),
+                has_override: ov.is_some(),
+                extra_process_names: ov.map(|o| o.extra_process_names.clone()).unwrap_or_default(),
+                idle_multiplier: ov.and_then(|o| o.idle_multiplier),
+                treat_as_browser: ov.and_then(|o| o.treat_as_browser),
+                merge_into_app_id: ov.and_then(|o| o.merge_into_app_id.clone()),
+                custom_tag: ov.and_then(|o| o.custom_tag.clone()),
+            }
         })
         .collect();
 
@@ -295,12 +365,25 @@ pub fn update_app_override(
     input: AppOverrideInput,
     state: State<'_, Arc<SharedAppState>>,
 ) -> Result<CatalogAppDto, String> {
+    let extra_procs: Vec<String> = input
+        .extra_process_names
+        .iter()
+        .map(|p| normalize_process_token(p))
+        .filter(|p| !p.is_empty())
+        .collect();
+
     let ov = AppOverride {
         app_id: input.app_id.clone(),
         display_name: input.display_name,
         category: input.category,
         description: input.description,
         ignored: input.ignored,
+        extra_process_names: extra_procs.clone(),
+        idle_multiplier: input.idle_multiplier,
+        treat_as_browser: input.treat_as_browser,
+        merge_into_app_id: input.merge_into_app_id.filter(|s| !s.trim().is_empty()),
+        custom_tag: input.custom_tag.filter(|s| !s.trim().is_empty()),
+        custom_icon_data_url: input.custom_icon_data_url.filter(|s| !s.trim().is_empty()),
     };
 
     {
@@ -334,7 +417,239 @@ pub fn update_app_override(
         today_secs: 0,
         last_seen_ts: updated_meta.last_seen_ts,
         install_hint: updated_meta.exe_paths.first().cloned(),
+        has_override: true,
+        extra_process_names: ov.extra_process_names,
+        idle_multiplier: ov.idle_multiplier,
+        treat_as_browser: ov.treat_as_browser,
+        merge_into_app_id: ov.merge_into_app_id,
+        custom_tag: ov.custom_tag,
     })
+}
+
+#[tauri::command]
+pub fn reset_app_override(
+    app_id: String,
+    state: State<'_, Arc<SharedAppState>>,
+) -> Result<Vec<CatalogAppDto>, String> {
+    {
+        let mut overrides = state.overrides.lock().unwrap();
+        overrides.remove(&app_id);
+        state.storage.save_overrides(&overrides)?;
+    }
+    Ok(rescan_local_software(state))
+}
+
+#[tauri::command]
+pub fn get_custom_app_rules(state: State<'_, Arc<SharedAppState>>) -> Vec<CustomAppRule> {
+    state.custom_rules.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn save_custom_app_rule(
+    input: CustomAppRuleInput,
+    state: State<'_, Arc<SharedAppState>>,
+) -> Result<Vec<CustomAppRule>, String> {
+    let display_name = input.display_name.trim().to_string();
+    if display_name.is_empty() {
+        return Err("请填写自定义软件名称".to_string());
+    }
+    let process_names: Vec<String> = input
+        .process_names
+        .iter()
+        .map(|p| normalize_process_token(p))
+        .filter(|p| !p.is_empty())
+        .collect();
+    let path_contains: Vec<String> = input
+        .path_contains
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+    let title_contains: Vec<String> = input
+        .title_contains
+        .iter()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if process_names.is_empty() && path_contains.is_empty() && title_contains.is_empty() {
+        return Err("请至少填写一个进程名、路径关键词或窗口标题关键词".to_string());
+    }
+
+    let now_ts = Local::now().timestamp();
+    let rule_id = input
+        .rule_id
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| format!("rule-{now_ts}"));
+    let slug = slugify_app_id(&display_name).replace("scanned.", "");
+    let app_id = format!("custom.{slug}");
+
+    let rule = CustomAppRule {
+        rule_id: rule_id.clone(),
+        app_id,
+        display_name,
+        category: input.category,
+        description: input.description.unwrap_or_default().trim().to_string(),
+        publisher: input
+            .publisher
+            .filter(|s| !s.trim().is_empty())
+            .unwrap_or_else(|| "用户自定义".to_string()),
+        process_names,
+        path_contains,
+        title_contains,
+        ignored: input.ignored,
+        treat_as_browser: input.treat_as_browser,
+        idle_multiplier: input.idle_multiplier.min(10),
+        merge_into_app_id: input.merge_into_app_id.filter(|s| !s.trim().is_empty()),
+        custom_tag: input.custom_tag.filter(|s| !s.trim().is_empty()),
+        custom_icon_data_url: input.custom_icon_data_url.filter(|s| !s.trim().is_empty()),
+    };
+
+    let rules_snapshot = {
+        let mut rules = state.custom_rules.lock().unwrap();
+        if let Some(pos) = rules.iter().position(|r| r.rule_id == rule_id) {
+            rules[pos] = rule.clone();
+        } else {
+            rules.push(rule.clone());
+        }
+        state.storage.save_custom_rules(&rules)?;
+        rules.clone()
+    };
+
+    {
+        let mut catalog = state.catalog.lock().unwrap();
+        sync_custom_rule_into_catalog(&mut catalog, &rule);
+        let _ = state.storage.save_catalog(&catalog);
+    }
+
+    Ok(rules_snapshot)
+}
+
+#[tauri::command]
+pub fn delete_custom_app_rule(
+    rule_id: String,
+    state: State<'_, Arc<SharedAppState>>,
+) -> Result<Vec<CustomAppRule>, String> {
+    let mut removed_app_id: Option<String> = None;
+    let rules_snapshot = {
+        let mut rules = state.custom_rules.lock().unwrap();
+        if let Some(pos) = rules.iter().position(|r| r.rule_id == rule_id) {
+            removed_app_id = Some(rules[pos].app_id.clone());
+            rules.remove(pos);
+        }
+        state.storage.save_custom_rules(&rules)?;
+        rules.clone()
+    };
+
+    if let Some(aid) = removed_app_id {
+        let mut catalog = state.catalog.lock().unwrap();
+        if catalog.get(&aid).is_some_and(|m| m.source == "custom") {
+            catalog.remove(&aid);
+            let _ = state.storage.save_catalog(&catalog);
+        }
+    }
+
+    Ok(rules_snapshot)
+}
+
+#[tauri::command]
+pub fn get_sync_status(state: State<'_, Arc<SharedAppState>>) -> SyncStatusDto {
+    state.sync_status.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub async fn test_sync_connection(
+    provider: String,
+    settings: AppSettings,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || sync::test_connection(&provider, &settings.sync))
+        .await
+        .map_err(|e| format!("测试同步任务异常: {e}"))?
+}
+
+#[tauri::command]
+pub async fn run_sync_now(
+    provider: Option<String>,
+    settings: Option<AppSettings>,
+    state: State<'_, Arc<SharedAppState>>,
+) -> Result<SyncStatusDto, String> {
+    let shared = Arc::clone(state.inner());
+    let sync_cfg = if let Some(s) = settings {
+        let mut current = shared.settings.lock().unwrap();
+        *current = s.clone();
+        let _ = shared.storage.save_settings(&s);
+        s.sync
+    } else {
+        shared.settings.lock().unwrap().sync.clone()
+    };
+    let active_provider = provider
+        .filter(|p| !p.trim().is_empty())
+        .unwrap_or_else(|| sync_cfg.provider.clone());
+
+    {
+        let mut st = shared.sync_status.lock().unwrap();
+        st.status = "syncing".to_string();
+        st.provider = Some(active_provider.clone());
+        st.message = "正在执行双向同步...".to_string();
+    }
+
+    // Flush active session snapshot so today's latest usage is included
+    let pending_copy = shared.runtime.lock().unwrap().active_session.clone();
+    if let Some(ref s) = pending_copy {
+        if s.duration_secs >= 2 && s.end_ts > s.start_ts {
+            let _ = shared.storage.append_session(s);
+        }
+    }
+
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let mut ov = shared.overrides.lock().unwrap().clone();
+        let mut rules = shared.custom_rules.lock().unwrap().clone();
+        let res = sync::run_bidirectional_sync(
+            &active_provider,
+            &sync_cfg,
+            &shared.storage,
+            &mut ov,
+            &mut rules,
+        );
+
+        match res {
+            Ok(status_dto) => {
+                *shared.overrides.lock().unwrap() = ov.clone();
+                *shared.custom_rules.lock().unwrap() = rules.clone();
+                {
+                    let mut catalog = shared.catalog.lock().unwrap();
+                    for rule in &rules {
+                        sync_custom_rule_into_catalog(&mut catalog, rule);
+                    }
+                    for (aid, o) in &ov {
+                        if let Some(meta) = catalog.get_mut(aid) {
+                            apply_override(meta, o);
+                        }
+                    }
+                    let _ = shared.storage.save_catalog(&catalog);
+                }
+                *shared.sync_status.lock().unwrap() = status_dto.clone();
+                Ok(status_dto)
+            }
+            Err(err_msg) => {
+                let err_dto = SyncStatusDto {
+                    status: "error".to_string(),
+                    provider: Some(active_provider),
+                    last_sync_ts: Some(Local::now().timestamp()),
+                    message: err_msg.clone(),
+                    uploaded_files: 0,
+                    downloaded_files: 0,
+                    merged_sessions: 0,
+                };
+                *shared.sync_status.lock().unwrap() = err_dto;
+                Err(err_msg)
+            }
+        }
+    })
+    .await
+    .map_err(|e| format!("同步线程执行异常: {e}"))?;
+
+    result
 }
 
 #[tauri::command]
@@ -349,6 +664,7 @@ pub fn update_settings(
 ) -> Result<AppSettings, String> {
     let mut sanitized = settings;
     sanitized.idle_threshold_secs = sanitized.idle_threshold_secs.clamp(30, 3600);
+    sanitized.sync.auto_sync_interval_mins = sanitized.sync.auto_sync_interval_mins.clamp(5, 1440);
     if sanitized.theme != "light" && sanitized.theme != "dark" {
         sanitized.theme = "light".to_string();
     }

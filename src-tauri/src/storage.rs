@@ -1,4 +1,4 @@
-use crate::models::{AppMetadata, AppOverride, AppSettings, UsageSession};
+use crate::models::{AppMetadata, AppOverride, AppSettings, CustomAppRule, UsageSession};
 use chrono::{Local, NaiveDate, TimeZone};
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
@@ -11,6 +11,7 @@ pub struct Storage {
     exports_dir: PathBuf,
     catalog_path: PathBuf,
     overrides_path: PathBuf,
+    custom_rules_path: PathBuf,
     settings_path: PathBuf,
     active_session_path: PathBuf,
 }
@@ -28,6 +29,7 @@ impl Storage {
         let exports_dir = root_dir.join("exports");
         let catalog_path = root_dir.join("catalog.json");
         let overrides_path = root_dir.join("overrides.json");
+        let custom_rules_path = root_dir.join("custom_rules.json");
         let settings_path = root_dir.join("settings.json");
         let active_session_path = root_dir.join("active_session.json");
 
@@ -40,6 +42,7 @@ impl Storage {
             exports_dir,
             catalog_path,
             overrides_path,
+            custom_rules_path,
             settings_path,
             active_session_path,
         }
@@ -67,6 +70,65 @@ impl Storage {
 
     pub fn save_overrides(&self, overrides: &HashMap<String, AppOverride>) -> Result<(), String> {
         atomic_write_json(&self.overrides_path, overrides)
+    }
+
+    pub fn load_custom_rules(&self) -> Vec<CustomAppRule> {
+        read_json_or_default(&self.custom_rules_path)
+    }
+
+    pub fn save_custom_rules(&self, rules: &[CustomAppRule]) -> Result<(), String> {
+        atomic_write_json(&self.custom_rules_path, &rules)
+    }
+
+    pub fn list_session_dates(&self) -> Vec<String> {
+        let Ok(entries) = fs::read_dir(&self.sessions_dir) else {
+            return Vec::new();
+        };
+        let mut dates: Vec<String> = entries
+            .flatten()
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let stem = name.strip_suffix(".jsonl")?;
+                if NaiveDate::parse_from_str(stem, "%Y-%m-%d").is_ok() {
+                    Some(stem.to_string())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        dates.sort();
+        dates
+    }
+
+    pub fn load_sessions_by_date_str(&self, date_str: &str) -> Vec<UsageSession> {
+        if let Ok(d) = NaiveDate::parse_from_str(date_str, "%Y-%m-%d") {
+            self.load_sessions_for_date(d)
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn write_sessions_for_date_str(
+        &self,
+        date_str: &str,
+        sessions: &[UsageSession],
+    ) -> Result<(), String> {
+        let path = self.sessions_dir.join(format!("{date_str}.jsonl"));
+        let tmp = self.sessions_dir.join(format!("{date_str}.jsonl.tmp"));
+        let mut buf = String::new();
+        for s in sessions {
+            if s.duration_secs > 0 && s.end_ts > s.start_ts {
+                let line = serde_json::to_string(s).map_err(|e| e.to_string())?;
+                buf.push_str(&line);
+                buf.push('\n');
+            }
+        }
+        fs::write(&tmp, buf.as_bytes()).map_err(|e| format!("写入同步会话临时文件失败: {e}"))?;
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
+        fs::rename(&tmp, &path).map_err(|e| format!("替换同步会话文件失败: {e}"))?;
+        Ok(())
     }
 
     pub fn save_active_checkpoint(&self, session: Option<&UsageSession>) {

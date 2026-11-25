@@ -5,15 +5,17 @@ mod demo;
 mod models;
 mod scanner;
 mod storage;
+mod sync;
 mod web_catalog;
+mod win_http;
 mod win_probe;
 
 use crate::catalog::{
     apply_override, extract_process_stem, is_browser_stem, is_ignored_process,
-    is_lock_screen_process, resolve_observed_app, SELF_APP_ID,
+    is_lock_screen_process, match_custom_rule, resolve_observed_app_with_custom, SELF_APP_ID,
 };
-use crate::commands::{RuntimeTrackerState, SharedAppState};
-use crate::models::{AppCategory, UsageSession};
+use crate::commands::{sync_custom_rule_into_catalog, RuntimeTrackerState, SharedAppState};
+use crate::models::{AppCategory, SyncStatusDto, UsageSession};
 use crate::scanner::scan_installed_software;
 use crate::storage::Storage;
 use crate::web_catalog::resolve_browser_page;
@@ -38,6 +40,67 @@ fn flush_active_session(state: &SharedAppState, session: Option<UsageSession>) {
     state.storage.save_active_checkpoint(None);
 }
 
+fn spawn_auto_sync_thread(shared: Arc<SharedAppState>) {
+    thread::spawn(move || {
+        let mut elapsed_secs: u64 = 0;
+        loop {
+            thread::sleep(Duration::from_secs(30));
+            elapsed_secs += 30;
+
+            let sync_cfg = shared.settings.lock().unwrap().sync.clone();
+            if !sync_cfg.auto_sync_enabled || sync_cfg.provider == "none" {
+                elapsed_secs = 0;
+                continue;
+            }
+            let interval_secs = sync_cfg.auto_sync_interval_mins.clamp(5, 1440) * 60;
+            if elapsed_secs < interval_secs {
+                continue;
+            }
+            elapsed_secs = 0;
+
+            let provider = sync_cfg.provider.clone();
+            let mut ov = shared.overrides.lock().unwrap().clone();
+            let mut rules = shared.custom_rules.lock().unwrap().clone();
+            match sync::run_bidirectional_sync(
+                &provider,
+                &sync_cfg,
+                &shared.storage,
+                &mut ov,
+                &mut rules,
+            ) {
+                Ok(status) => {
+                    *shared.overrides.lock().unwrap() = ov.clone();
+                    *shared.custom_rules.lock().unwrap() = rules.clone();
+                    {
+                        let mut catalog = shared.catalog.lock().unwrap();
+                        for r in &rules {
+                            sync_custom_rule_into_catalog(&mut catalog, r);
+                        }
+                        for (aid, o) in &ov {
+                            if let Some(meta) = catalog.get_mut(aid) {
+                                apply_override(meta, o);
+                            }
+                        }
+                        let _ = shared.storage.save_catalog(&catalog);
+                    }
+                    *shared.sync_status.lock().unwrap() = status;
+                }
+                Err(msg) => {
+                    *shared.sync_status.lock().unwrap() = SyncStatusDto {
+                        status: "error".to_string(),
+                        provider: Some(provider),
+                        last_sync_ts: Some(Local::now().timestamp()),
+                        message: msg,
+                        uploaded_files: 0,
+                        downloaded_files: 0,
+                        merged_sessions: 0,
+                    };
+                }
+            }
+        }
+    });
+}
+
 fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
     thread::spawn(move || {
         let mut checkpoint_ticks: u64 = 0;
@@ -60,7 +123,6 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
                 continue;
             }
 
-            // Check lock screen
             if settings.pause_on_lock && is_workstation_locked() {
                 let pending = {
                     let mut rt = shared.runtime.lock().unwrap();
@@ -74,21 +136,43 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
             }
 
             let idle_secs = get_idle_seconds();
-            let current_cat = {
+            let (current_cat, custom_idle_mult) = {
                 let rt = shared.runtime.lock().unwrap();
                 let catalog = shared.catalog.lock().unwrap();
-                rt.active_session
-                    .as_ref()
-                    .and_then(|s| catalog.get(&s.app_id).map(|m| m.category))
-            };
-            // Relax idle detection 3x while watching media so full-screen videos aren't clipped prematurely
-            let effective_idle_limit = if current_cat == Some(AppCategory::Media) {
-                settings.idle_threshold_secs.saturating_mul(3)
-            } else {
-                settings.idle_threshold_secs
+                let overrides = shared.overrides.lock().unwrap();
+                let custom_rules = shared.custom_rules.lock().unwrap();
+                if let Some(ref s) = rt.active_session {
+                    let cat = catalog.get(&s.app_id).map(|m| m.category);
+                    let mult = overrides
+                        .get(&s.app_id)
+                        .and_then(|o| o.idle_multiplier)
+                        .or_else(|| {
+                            custom_rules
+                                .iter()
+                                .find(|r| r.app_id == s.app_id)
+                                .map(|r| r.idle_multiplier)
+                        });
+                    (cat, mult)
+                } else {
+                    (None, None)
+                }
             };
 
-            if idle_secs >= effective_idle_limit {
+            // idle_multiplier == Some(0) means continuous tracking (never idle for this app)
+            let is_idle = match custom_idle_mult {
+                Some(0) => false,
+                Some(mult) => idle_secs >= settings.idle_threshold_secs.saturating_mul(mult as u64),
+                None => {
+                    let limit = if current_cat == Some(AppCategory::Media) {
+                        settings.idle_threshold_secs.saturating_mul(3)
+                    } else {
+                        settings.idle_threshold_secs
+                    };
+                    idle_secs >= limit
+                }
+            };
+
+            if is_idle {
                 let pending = {
                     let mut rt = shared.runtime.lock().unwrap();
                     rt.state_code = "idle".to_string();
@@ -117,11 +201,26 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
                 continue;
             }
 
-            if is_ignored_process(
-                &sample.exe_stem_lower,
-                &sample.exe_path.to_lowercase(),
-                Some(&sample.window_class),
-            ) {
+            // Priority #0 check: if user defined an explicit custom rule matching this process,
+            // allow it to bypass default system noise filtering!
+            let has_explicit_custom_rule = {
+                let custom_rules = shared.custom_rules.lock().unwrap();
+                match_custom_rule(
+                    &sample.exe_stem_lower,
+                    &sample.exe_path.to_lowercase(),
+                    &sample.window_title.to_lowercase(),
+                    &custom_rules,
+                )
+                .is_some()
+            };
+
+            if !has_explicit_custom_rule
+                && is_ignored_process(
+                    &sample.exe_stem_lower,
+                    &sample.exe_path.to_lowercase(),
+                    Some(&sample.window_class),
+                )
+            {
                 let pending = {
                     let mut rt = shared.runtime.lock().unwrap();
                     rt.state_code = "desktop".to_string();
@@ -139,55 +238,59 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
             let today_str = now_dt.format("%Y-%m-%d").to_string();
             let proc_stem = extract_process_stem(&sample.exe_path);
 
-            let resolved = {
+            let resolved_ctx = {
                 let mut catalog = shared.catalog.lock().unwrap();
                 let overrides = shared.overrides.lock().unwrap();
-                let mut meta = resolve_observed_app(
+                let custom_rules = shared.custom_rules.lock().unwrap();
+                let mut ctx = resolve_observed_app_with_custom(
                     &sample.exe_path,
                     sample.pe_product.as_deref(),
                     sample.pe_description.as_deref(),
                     sample.pe_company.as_deref(),
                     Some(&sample.window_title),
                     &catalog,
+                    &overrides,
+                    &custom_rules,
                 );
 
-                if let Some(ov) = overrides.get(&meta.app_id) {
-                    apply_override(&mut meta, ov);
+                if ctx.meta.icon_data_url.is_none() && !sample.exe_path.is_empty() {
+                    ctx.meta.icon_data_url = extract_icon_png_data_url(&sample.exe_path);
                 }
-                if meta.icon_data_url.is_none() && !sample.exe_path.is_empty() {
-                    meta.icon_data_url = extract_icon_png_data_url(&sample.exe_path);
-                }
-                meta.last_seen_ts = Some(now_ts);
-                meta.installed = true;
+                ctx.meta.last_seen_ts = Some(now_ts);
+                ctx.meta.installed = true;
                 if !sample.exe_path.is_empty()
-                    && !meta
+                    && !ctx
+                        .meta
                         .exe_paths
                         .iter()
                         .any(|p| p.eq_ignore_ascii_case(&sample.exe_path))
                 {
-                    meta.exe_paths.push(sample.exe_path.clone());
+                    ctx.meta.exe_paths.push(sample.exe_path.clone());
                 }
                 if !proc_stem.is_empty()
-                    && !meta
+                    && !ctx
+                        .meta
                         .process_names
                         .iter()
                         .any(|p| p.eq_ignore_ascii_case(&proc_stem))
                 {
-                    meta.process_names.push(proc_stem.clone());
+                    ctx.meta.process_names.push(proc_stem.clone());
                 }
 
-                let is_new_entry = !catalog.contains_key(&meta.app_id)
-                    || catalog.get(&meta.app_id).is_some_and(|old| {
-                        (old.icon_data_url.is_none() && meta.icon_data_url.is_some())
-                            || old.source != meta.source
-                            || old.display_name != meta.display_name
+                let is_new_entry = !catalog.contains_key(&ctx.meta.app_id)
+                    || catalog.get(&ctx.meta.app_id).is_some_and(|old| {
+                        (old.icon_data_url.is_none() && ctx.meta.icon_data_url.is_some())
+                            || old.source != ctx.meta.source
+                            || old.display_name != ctx.meta.display_name
                     });
-                catalog.insert(meta.app_id.clone(), meta.clone());
+                catalog.insert(ctx.meta.app_id.clone(), ctx.meta.clone());
                 if is_new_entry {
                     let _ = shared.storage.save_catalog(&catalog);
                 }
-                meta
+                ctx
             };
+
+            let resolved = resolved_ctx.meta;
 
             if resolved.ignored {
                 let pending = {
@@ -214,8 +317,13 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
                 continue;
             }
 
-            let is_browser = resolved.category == AppCategory::Browser
-                || is_browser_stem(&sample.exe_stem_lower);
+            let is_browser = match resolved_ctx.treat_as_browser {
+                Some(explicit) => explicit,
+                None => {
+                    resolved.category == AppCategory::Browser
+                        || is_browser_stem(&sample.exe_stem_lower)
+                }
+            };
             let web_page = if is_browser && settings.web_tracking_enabled {
                 let cached_url = match &browser_url_cache {
                     Some((cached_hwnd, cached_title, age, url))
@@ -330,10 +438,13 @@ pub fn run() {
     let _ = storage.recover_active_checkpoint();
     let settings = storage.load_settings();
     let overrides = storage.load_overrides();
+    let custom_rules = storage.load_custom_rules();
     let mut catalog = storage.load_catalog();
 
-    // Perform initial local software scan (extract icons for uninstalled/uncached items)
     scan_installed_software(&mut catalog, true);
+    for rule in &custom_rules {
+        sync_custom_rule_into_catalog(&mut catalog, rule);
+    }
     for (aid, ov) in &overrides {
         if let Some(meta) = catalog.get_mut(aid) {
             apply_override(meta, ov);
@@ -352,6 +463,8 @@ pub fn run() {
         settings: Mutex::new(settings),
         catalog: Mutex::new(catalog),
         overrides: Mutex::new(overrides),
+        custom_rules: Mutex::new(custom_rules),
+        sync_status: Mutex::new(SyncStatusDto::default()),
         runtime: Mutex::new(RuntimeTrackerState {
             state_code: initial_state_code,
             active_session: None,
@@ -361,6 +474,7 @@ pub fn run() {
     });
 
     spawn_monitor_thread(Arc::clone(&shared));
+    spawn_auto_sync_thread(Arc::clone(&shared));
 
     let shared_for_tray = Arc::clone(&shared);
     let shared_for_win = Arc::clone(&shared);
@@ -438,6 +552,13 @@ pub fn run() {
             commands::get_software_catalog,
             commands::rescan_local_software,
             commands::update_app_override,
+            commands::reset_app_override,
+            commands::get_custom_app_rules,
+            commands::save_custom_app_rule,
+            commands::delete_custom_app_rule,
+            commands::get_sync_status,
+            commands::test_sync_connection,
+            commands::run_sync_now,
             commands::get_settings,
             commands::update_settings,
             commands::toggle_tracking,

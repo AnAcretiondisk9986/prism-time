@@ -1,0 +1,22 @@
+[package]
+name = "prism-time-setup"
+version = "0.3.0"
+edition = "2021"
+description = "PrismTime V0.3.0 Single-File Windows Installer"
+
+[build-dependencies]
+tauri-winres = { path = "../vendor/tauri-winres" }
+
+[dependencies]
+flate2 = "1"
+windows-registry = "0.6"
+windows = { version = "0.62", features = [
+  "Win32_Foundation",
+  "Win32_UI_WindowsAndMessaging",
+] }
+
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+opt-level = "z"

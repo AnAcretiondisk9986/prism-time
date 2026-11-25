@@ -46,6 +46,26 @@ export function App() {
     track_self: false,
     web_tracking_enabled: true,
     theme: "light",
+    sync: {
+      provider: "none",
+      auto_sync_enabled: false,
+      auto_sync_interval_mins: 30,
+      device_name: "Windows-PC",
+      sync_overrides: true,
+      webdav: {
+        server_url: "",
+        username: "",
+        password: "",
+        remote_dir: "PrismTime",
+      },
+      github: {
+        owner: "",
+        repo: "",
+        branch: "main",
+        path_prefix: "prismtime-sync",
+        token: "",
+      },
+    },
   });
   const [liveStatus, setLiveStatus] = useState<LiveStatusDto | null>(null);
   const [analytics, setAnalytics] = useState<DashboardAnalyticsDto | null>(null);
@@ -241,6 +261,10 @@ export function App() {
                 liveStatus={liveStatus}
                 demoMode={demoMode}
                 onUpdateSettings={handleUpdateSettings}
+                onSyncCompleted={() => {
+                  void loadAll();
+                  void loadAnalytics();
+                }}
               />
             )}
           </div>

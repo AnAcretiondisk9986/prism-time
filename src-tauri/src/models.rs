@@ -151,6 +151,75 @@ pub struct AppOverride {
     pub category: Option<AppCategory>,
     pub description: Option<String>,
     pub ignored: Option<bool>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extra_process_names: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub idle_multiplier: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub treat_as_browser: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_into_app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_icon_data_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomAppRule {
+    pub rule_id: String,
+    pub app_id: String,
+    pub display_name: String,
+    pub category: AppCategory,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub publisher: String,
+    #[serde(default)]
+    pub process_names: Vec<String>,
+    #[serde(default)]
+    pub path_contains: Vec<String>,
+    #[serde(default)]
+    pub title_contains: Vec<String>,
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(default)]
+    pub treat_as_browser: bool,
+    #[serde(default = "default_idle_mult")]
+    pub idle_multiplier: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub merge_into_app_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_tag: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub custom_icon_data_url: Option<String>,
+}
+
+fn default_idle_mult() -> u32 {
+    1
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomAppRuleInput {
+    pub rule_id: Option<String>,
+    pub display_name: String,
+    pub category: AppCategory,
+    pub description: Option<String>,
+    pub publisher: Option<String>,
+    pub process_names: Vec<String>,
+    #[serde(default)]
+    pub path_contains: Vec<String>,
+    #[serde(default)]
+    pub title_contains: Vec<String>,
+    #[serde(default)]
+    pub ignored: bool,
+    #[serde(default)]
+    pub treat_as_browser: bool,
+    #[serde(default = "default_idle_mult")]
+    pub idle_multiplier: u32,
+    pub merge_into_app_id: Option<String>,
+    pub custom_tag: Option<String>,
+    pub custom_icon_data_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,6 +246,139 @@ fn default_true() -> bool {
     true
 }
 
+fn default_sync_interval() -> u64 {
+    30
+}
+
+fn default_remote_dir() -> String {
+    "PrismTime".to_string()
+}
+
+fn default_branch() -> String {
+    "main".to_string()
+}
+
+fn default_github_path() -> String {
+    "prismtime-sync".to_string()
+}
+
+fn default_device_name() -> String {
+    std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_| "Windows-PC".to_string())
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebDavConfig {
+    #[serde(default)]
+    pub server_url: String,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+    #[serde(default = "default_remote_dir")]
+    pub remote_dir: String,
+}
+
+impl Default for WebDavConfig {
+    fn default() -> Self {
+        Self {
+            server_url: String::new(),
+            username: String::new(),
+            password: String::new(),
+            remote_dir: default_remote_dir(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GitHubSyncConfig {
+    #[serde(default)]
+    pub owner: String,
+    #[serde(default)]
+    pub repo: String,
+    #[serde(default = "default_branch")]
+    pub branch: String,
+    #[serde(default = "default_github_path")]
+    pub path_prefix: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+impl Default for GitHubSyncConfig {
+    fn default() -> Self {
+        Self {
+            owner: String::new(),
+            repo: String::new(),
+            branch: default_branch(),
+            path_prefix: default_github_path(),
+            token: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncConfig {
+    /// "none" | "webdav" | "github"
+    #[serde(default = "default_sync_provider")]
+    pub provider: String,
+    #[serde(default)]
+    pub auto_sync_enabled: bool,
+    #[serde(default = "default_sync_interval")]
+    pub auto_sync_interval_mins: u64,
+    #[serde(default = "default_device_name")]
+    pub device_name: String,
+    #[serde(default = "default_true")]
+    pub sync_overrides: bool,
+    #[serde(default)]
+    pub webdav: WebDavConfig,
+    #[serde(default)]
+    pub github: GitHubSyncConfig,
+}
+
+fn default_sync_provider() -> String {
+    "none".to_string()
+}
+
+impl Default for SyncConfig {
+    fn default() -> Self {
+        Self {
+            provider: default_sync_provider(),
+            auto_sync_enabled: false,
+            auto_sync_interval_mins: default_sync_interval(),
+            device_name: default_device_name(),
+            sync_overrides: true,
+            webdav: WebDavConfig::default(),
+            github: GitHubSyncConfig::default(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SyncStatusDto {
+    pub status: String, // "idle" | "syncing" | "success" | "error"
+    pub provider: Option<String>,
+    pub last_sync_ts: Option<i64>,
+    pub message: String,
+    pub uploaded_files: usize,
+    pub downloaded_files: usize,
+    pub merged_sessions: usize,
+}
+
+impl Default for SyncStatusDto {
+    fn default() -> Self {
+        Self {
+            status: "idle".to_string(),
+            provider: None,
+            last_sync_ts: None,
+            message: "尚未执行同步".to_string(),
+            uploaded_files: 0,
+            downloaded_files: 0,
+            merged_sessions: 0,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub tracking_enabled: bool,
@@ -188,6 +390,8 @@ pub struct AppSettings {
     #[serde(default = "default_true")]
     pub web_tracking_enabled: bool,
     pub theme: String,
+    #[serde(default)]
+    pub sync: SyncConfig,
 }
 
 impl Default for AppSettings {
@@ -201,6 +405,7 @@ impl Default for AppSettings {
             track_self: false,
             web_tracking_enabled: true,
             theme: "light".to_string(),
+            sync: SyncConfig::default(),
         }
     }
 }
@@ -457,6 +662,18 @@ pub struct CatalogAppDto {
     pub today_secs: i64,
     pub last_seen_ts: Option<i64>,
     pub install_hint: Option<String>,
+    #[serde(default)]
+    pub has_override: bool,
+    #[serde(default)]
+    pub extra_process_names: Vec<String>,
+    #[serde(default)]
+    pub idle_multiplier: Option<u32>,
+    #[serde(default)]
+    pub treat_as_browser: Option<bool>,
+    #[serde(default)]
+    pub merge_into_app_id: Option<String>,
+    #[serde(default)]
+    pub custom_tag: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -466,6 +683,13 @@ pub struct AppOverrideInput {
     pub category: Option<AppCategory>,
     pub description: Option<String>,
     pub ignored: Option<bool>,
+    #[serde(default)]
+    pub extra_process_names: Vec<String>,
+    pub idle_multiplier: Option<u32>,
+    pub treat_as_browser: Option<bool>,
+    pub merge_into_app_id: Option<String>,
+    pub custom_tag: Option<String>,
+    pub custom_icon_data_url: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

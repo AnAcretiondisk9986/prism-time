@@ -87,6 +87,41 @@ export interface AppMetadata {
   last_seen_ts: number | null;
 }
 
+export interface WebDavConfig {
+  server_url: string;
+  username: string;
+  password: string;
+  remote_dir: string;
+}
+
+export interface GitHubSyncConfig {
+  owner: string;
+  repo: string;
+  branch: string;
+  path_prefix: string;
+  token: string;
+}
+
+export interface SyncConfig {
+  provider: "none" | "webdav" | "github";
+  auto_sync_enabled: boolean;
+  auto_sync_interval_mins: number;
+  device_name: string;
+  sync_overrides: boolean;
+  webdav: WebDavConfig;
+  github: GitHubSyncConfig;
+}
+
+export interface SyncStatusDto {
+  status: "idle" | "syncing" | "success" | "error";
+  provider: string | null;
+  last_sync_ts: number | null;
+  message: string;
+  uploaded_files: number;
+  downloaded_files: number;
+  merged_sessions: number;
+}
+
 export interface AppSettings {
   tracking_enabled: boolean;
   idle_threshold_secs: number;
@@ -96,6 +131,7 @@ export interface AppSettings {
   track_self: boolean;
   web_tracking_enabled: boolean;
   theme: "light" | "dark";
+  sync: SyncConfig;
 }
 
 export interface LiveStatusDto {
@@ -331,6 +367,12 @@ export interface CatalogAppDto {
   today_secs: number;
   last_seen_ts: number | null;
   install_hint: string | null;
+  has_override?: boolean;
+  extra_process_names?: string[];
+  idle_multiplier?: number | null;
+  treat_as_browser?: boolean | null;
+  merge_into_app_id?: string | null;
+  custom_tag?: string | null;
 }
 
 export interface AppOverrideInput {
@@ -339,6 +381,47 @@ export interface AppOverrideInput {
   category?: AppCategory | null;
   description?: string | null;
   ignored?: boolean | null;
+  extra_process_names?: string[];
+  idle_multiplier?: number | null;
+  treat_as_browser?: boolean | null;
+  merge_into_app_id?: string | null;
+  custom_tag?: string | null;
+  custom_icon_data_url?: string | null;
+}
+
+export interface CustomAppRule {
+  rule_id: string;
+  app_id: string;
+  display_name: string;
+  category: AppCategory;
+  description: string;
+  publisher: string;
+  process_names: string[];
+  path_contains: string[];
+  title_contains: string[];
+  ignored: boolean;
+  treat_as_browser: boolean;
+  idle_multiplier: number;
+  merge_into_app_id?: string | null;
+  custom_tag?: string | null;
+  custom_icon_data_url?: string | null;
+}
+
+export interface CustomAppRuleInput {
+  rule_id?: string | null;
+  display_name: string;
+  category: AppCategory;
+  description?: string | null;
+  publisher?: string | null;
+  process_names: string[];
+  path_contains?: string[];
+  title_contains?: string[];
+  ignored?: boolean;
+  treat_as_browser?: boolean;
+  idle_multiplier?: number;
+  merge_into_app_id?: string | null;
+  custom_tag?: string | null;
+  custom_icon_data_url?: string | null;
 }
 
 export interface ExportResultDto {

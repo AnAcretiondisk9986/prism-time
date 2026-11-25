@@ -156,6 +156,41 @@ export const EditIcon: React.FC<IconProps> = ({ className = "", size = 14 }) => 
   </svg>
 );
 
+export const PlusIcon: React.FC<IconProps> = ({ className = "", size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+    <path d="M12 5V19M5 12H19" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" />
+  </svg>
+);
+
+export const TrashIcon: React.FC<IconProps> = ({ className = "", size = 14 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+    <path d="M4.5 7H19.5M9.5 7V5.2C9.5 4.5 10 4 10.7 4H13.3C14 4 14.5 4.5 14.5 5.2V7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+    <path d="M6.8 7L7.6 18.6C7.7 19.4 8.3 20 9.1 20H14.9C15.7 20 16.3 19.4 16.4 18.6L17.2 7" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+  </svg>
+);
+
+export const CloudSyncIcon: React.FC<IconProps> = ({ className = "", size = 15 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+    <path
+      d="M7.5 18.2H17.2C19.3 18.2 21 16.6 21 14.5C21 12.6 19.6 11.1 17.7 10.9C17.1 7.6 14.2 5.2 10.8 5.2C7 5.2 4 8.2 4 12C4 12.4 4 12.8 4.1 13.1C2.9 13.8 2.2 15 2.2 16.3C2.2 17.4 3.1 18.2 4.2 18.2"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+    />
+    <path d="M12 11.5V19.5M12 11.5L9.5 14M12 11.5L14.5 14" stroke="currentColor" strokeWidth="1.65" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+export const GitRepoIcon: React.FC<IconProps> = ({ className = "", size = 15 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+    <circle cx="7" cy="6.5" r="2.2" stroke="currentColor" strokeWidth="1.7" />
+    <circle cx="17" cy="8.5" r="2.2" stroke="currentColor" strokeWidth="1.7" />
+    <circle cx="7" cy="17.5" r="2.2" stroke="currentColor" strokeWidth="1.7" />
+    <path d="M7 8.7V15.3M17 10.7C17 13.8 14.5 14.8 10.2 14.8H7" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+  </svg>
+);
+
 export const MinimizeWinIcon: React.FC<IconProps> = ({ className = "", size = 12 }) => (
   <svg width={size} height={size} viewBox="0 0 16 16" fill="none" className={className} aria-hidden="true">
     <path d="M3 8.5H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />

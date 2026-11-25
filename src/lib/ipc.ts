@@ -6,11 +6,14 @@ import type {
   AppOverrideInput,
   AppSettings,
   CatalogAppDto,
+  CustomAppRule,
+  CustomAppRuleInput,
   DashboardAnalyticsDto,
   ExportResultDto,
   LiveStatusDto,
   SessionEventDto,
   SwimlaneSegmentDto,
+  SyncStatusDto,
   WebAnalyticsDto,
   WebCategory,
 } from "../types";
@@ -31,6 +34,37 @@ let previewSettings: AppSettings = {
   track_self: false,
   web_tracking_enabled: true,
   theme: "light",
+  sync: {
+    provider: "none",
+    auto_sync_enabled: false,
+    auto_sync_interval_mins: 30,
+    device_name: "Windows-PC",
+    sync_overrides: true,
+    webdav: {
+      server_url: "",
+      username: "",
+      password: "",
+      remote_dir: "PrismTime",
+    },
+    github: {
+      owner: "",
+      repo: "",
+      branch: "main",
+      path_prefix: "prismtime-sync",
+      token: "",
+    },
+  },
+};
+
+let previewCustomRules: CustomAppRule[] = [];
+let previewSyncStatus: SyncStatusDto = {
+  status: "idle",
+  provider: null,
+  last_sync_ts: null,
+  message: "尚未执行同步",
+  uploaded_files: 0,
+  downloaded_files: 0,
+  merged_sessions: 0,
 };
 
 const previewCatalog: CatalogAppDto[] = [
@@ -747,9 +781,113 @@ export async function updateAppOverride(input: AppOverrideInput): Promise<Catalo
     if (input.category) target.category = input.category;
     if (input.description) target.description = input.description;
     if (typeof input.ignored === "boolean") target.ignored = input.ignored;
+    target.has_override = true;
+    target.extra_process_names = input.extra_process_names || [];
+    target.idle_multiplier = input.idle_multiplier ?? null;
+    target.treat_as_browser = input.treat_as_browser ?? null;
+    target.merge_into_app_id = input.merge_into_app_id ?? null;
+    target.custom_tag = input.custom_tag ?? null;
+    if (input.custom_icon_data_url) target.icon_data_url = input.custom_icon_data_url;
     return { ...target };
   }
   return invoke<CatalogAppDto>("update_app_override", { input });
+}
+
+export async function resetAppOverride(appId: string): Promise<CatalogAppDto[]> {
+  if (!isTauriRuntime()) {
+    const target = previewCatalog.find((a) => a.app_id === appId);
+    if (target) {
+      target.has_override = false;
+      target.extra_process_names = [];
+      target.idle_multiplier = null;
+      target.treat_as_browser = null;
+      target.merge_into_app_id = null;
+      target.custom_tag = null;
+    }
+    return [...previewCatalog];
+  }
+  return invoke<CatalogAppDto[]>("reset_app_override", { appId });
+}
+
+export async function fetchCustomAppRules(): Promise<CustomAppRule[]> {
+  if (!isTauriRuntime()) {
+    return [...previewCustomRules];
+  }
+  return invoke<CustomAppRule[]>("get_custom_app_rules");
+}
+
+export async function saveCustomAppRule(input: CustomAppRuleInput): Promise<CustomAppRule[]> {
+  if (!isTauriRuntime()) {
+    const ruleId = input.rule_id || `rule-${Date.now()}`;
+    const nextRule: CustomAppRule = {
+      rule_id: ruleId,
+      app_id: `custom.${input.display_name.toLowerCase().replace(/[^a-z0-9]+/g, ".") || Date.now()}`,
+      display_name: input.display_name,
+      category: input.category,
+      description: input.description || "",
+      publisher: input.publisher || "用户自定义",
+      process_names: input.process_names,
+      path_contains: input.path_contains || [],
+      title_contains: input.title_contains || [],
+      ignored: Boolean(input.ignored),
+      treat_as_browser: Boolean(input.treat_as_browser),
+      idle_multiplier: input.idle_multiplier ?? 1,
+      merge_into_app_id: input.merge_into_app_id ?? null,
+      custom_tag: input.custom_tag ?? null,
+      custom_icon_data_url: input.custom_icon_data_url ?? null,
+    };
+    const idx = previewCustomRules.findIndex((r) => r.rule_id === ruleId);
+    if (idx >= 0) previewCustomRules[idx] = nextRule;
+    else previewCustomRules.push(nextRule);
+    return [...previewCustomRules];
+  }
+  return invoke<CustomAppRule[]>("save_custom_app_rule", { input });
+}
+
+export async function deleteCustomAppRule(ruleId: string): Promise<CustomAppRule[]> {
+  if (!isTauriRuntime()) {
+    previewCustomRules = previewCustomRules.filter((r) => r.rule_id !== ruleId);
+    return [...previewCustomRules];
+  }
+  return invoke<CustomAppRule[]>("delete_custom_app_rule", { ruleId });
+}
+
+export async function fetchSyncStatus(): Promise<SyncStatusDto> {
+  if (!isTauriRuntime()) {
+    return { ...previewSyncStatus };
+  }
+  return invoke<SyncStatusDto>("get_sync_status");
+}
+
+export async function testSyncConnection(
+  provider: "webdav" | "github",
+  settings: AppSettings,
+): Promise<string> {
+  if (!isTauriRuntime()) {
+    return provider === "webdav"
+      ? "预览模式：WebDAV 参数校验通过"
+      : "预览模式：GitHub 仓库参数校验通过";
+  }
+  return invoke<string>("test_sync_connection", { provider, settings });
+}
+
+export async function runSyncNow(
+  provider: "webdav" | "github" | null,
+  settings?: AppSettings,
+): Promise<SyncStatusDto> {
+  if (!isTauriRuntime()) {
+    previewSyncStatus = {
+      status: "success",
+      provider: provider || previewSettings.sync.provider,
+      last_sync_ts: Math.floor(Date.now() / 1000),
+      message: "预览模式：双向同步已完成",
+      uploaded_files: 2,
+      downloaded_files: 1,
+      merged_sessions: 0,
+    };
+    return { ...previewSyncStatus };
+  }
+  return invoke<SyncStatusDto>("run_sync_now", { provider, settings: settings ?? null });
 }
 
 export async function fetchSettings(): Promise<AppSettings> {

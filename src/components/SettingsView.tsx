@@ -1,13 +1,20 @@
-import React, { useState } from "react";
-import type { AppSettings, LiveStatusDto } from "../types";
-import { exportUsageReport } from "../lib/ipc";
-import { ExportIcon } from "./Icons";
+import React, { useEffect, useState } from "react";
+import type { AppSettings, LiveStatusDto, SyncConfig, SyncStatusDto } from "../types";
+import { formatTimestampHm } from "../lib/format";
+import {
+  exportUsageReport,
+  fetchSyncStatus,
+  runSyncNow,
+  testSyncConnection,
+} from "../lib/ipc";
+import { CloudSyncIcon, ExportIcon, GitRepoIcon, RefreshIcon } from "./Icons";
 
 interface SettingsViewProps {
   settings: AppSettings;
   liveStatus: LiveStatusDto | null;
   demoMode: boolean;
   onUpdateSettings: (next: AppSettings) => Promise<void>;
+  onSyncCompleted?: () => void;
 }
 
 const IDLE_OPTIONS = [
@@ -17,16 +24,89 @@ const IDLE_OPTIONS = [
   { secs: 600, label: "10 分钟" },
 ];
 
+const SYNC_INTERVAL_OPTIONS = [
+  { mins: 15, label: "15 分钟" },
+  { mins: 30, label: "30 分钟" },
+  { mins: 60, label: "1 小时" },
+  { mins: 180, label: "3 小时" },
+];
+
+const WEBDAV_PRESETS = [
+  { label: "坚果云", url: "https://dav.jianguoyun.com/dav/" },
+  { label: "Nextcloud", url: "https://your-domain.com/remote.php/dav/files/username/" },
+  { label: "Alist / 本地", url: "http://127.0.0.1:5244/dav/" },
+];
+
 export const SettingsView: React.FC<SettingsViewProps> = ({
   settings,
   liveStatus,
   demoMode,
   onUpdateSettings,
+  onSyncCompleted,
 }) => {
   const [exportStatus, setExportStatus] = useState<string | null>(null);
+  const [syncDraft, setSyncDraft] = useState<SyncConfig>(settings.sync);
+  const [syncStatus, setSyncStatus] = useState<SyncStatusDto | null>(null);
+  const [showSecret, setShowSecret] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [syncing, setSyncing] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    setSyncDraft(settings.sync);
+  }, [settings.sync]);
+
+  useEffect(() => {
+    void fetchSyncStatus().then(setSyncStatus);
+  }, []);
 
   const patch = (partial: Partial<AppSettings>) => {
     void onUpdateSettings({ ...settings, ...partial });
+  };
+
+  const patchSync = (partial: Partial<SyncConfig>) => {
+    const nextSync = { ...syncDraft, ...partial };
+    setSyncDraft(nextSync);
+  };
+
+  const handleSaveSync = async () => {
+    await onUpdateSettings({ ...settings, sync: syncDraft });
+    setSyncNotice({ ok: true, text: "同步配置已保存至本地 settings.json" });
+  };
+
+  const handleTestSync = async () => {
+    if (syncDraft.provider === "none") return;
+    setTesting(true);
+    setSyncNotice(null);
+    try {
+      const nextSettings: AppSettings = { ...settings, sync: syncDraft };
+      await onUpdateSettings(nextSettings);
+      const msg = await testSyncConnection(syncDraft.provider, nextSettings);
+      setSyncNotice({ ok: true, text: msg });
+    } catch (err) {
+      setSyncNotice({ ok: false, text: String(err) });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const handleRunSync = async () => {
+    if (syncDraft.provider === "none") return;
+    setSyncing(true);
+    setSyncNotice(null);
+    try {
+      const nextSettings: AppSettings = { ...settings, sync: syncDraft };
+      await onUpdateSettings(nextSettings);
+      const res = await runSyncNow(syncDraft.provider, nextSettings);
+      setSyncStatus(res);
+      setSyncNotice({ ok: true, text: res.message });
+      onSyncCompleted?.();
+    } catch (err) {
+      setSyncNotice({ ok: false, text: String(err) });
+      void fetchSyncStatus().then(setSyncStatus);
+    } finally {
+      setSyncing(false);
+    }
   };
 
   const handleExport = async (format: "csv" | "json") => {
@@ -39,13 +119,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   };
 
   return (
-    <div className="flex flex-col gap-5 pb-6 max-w-4xl">
+    <div className="flex flex-col gap-5 pb-8 max-w-4xl">
       <div>
         <h1 className="text-[20px] font-semibold tracking-tight text-[var(--text-primary)]">
-          监控与隐私设置
+          监控、同步与隐私设置
         </h1>
         <p className="text-[12.5px] text-[var(--text-secondary)] mt-0.5">
-          调整 Windows 前台窗口采样策略、空闲离开检测及本地纯离线数据管理
+          调整 Windows 前台采样策略、WebDAV / GitHub 仓库跨设备同步及本地纯离线数据管理
         </p>
       </div>
 
@@ -183,7 +263,348 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         </div>
       </div>
 
-      {/* Card 3: Local Storage & Data Export */}
+      {/* Card 3: WebDAV & GitHub Repo Sync */}
+      <div className="card-surface p-5 flex flex-col gap-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-[14px] font-semibold text-[var(--text-primary)]">
+              跨设备双向同步（WebDAV / GitHub 仓库）
+            </h3>
+            <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">
+              默认纯离线运行；按需绑定您自有 WebDAV 网盘或私有 GitHub 仓库，按日无损合并多台设备会话与自定义规则
+            </p>
+          </div>
+          {syncStatus?.last_sync_ts && (
+            <span className="px-2.5 py-1 rounded-full text-[11px] font-medium bg-[var(--bg-subtle)] border border-[var(--border-hairline)] text-[var(--text-secondary)] tabular-nums">
+              上次同步：{formatTimestampHm(syncStatus.last_sync_ts)}
+            </span>
+          )}
+        </div>
+
+        {/* Provider Switcher */}
+        <div className="grid grid-cols-3 gap-2">
+          {[
+            { id: "none" as const, title: "仅本地离线", desc: "不连接任何远端服务" },
+            { id: "webdav" as const, title: "WebDAV 同步", desc: "坚果云 / Nextcloud / Alist" },
+            { id: "github" as const, title: "GitHub 仓库", desc: "通过私有仓库与 PAT 同步" },
+          ].map((opt) => {
+            const active = syncDraft.provider === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => {
+                  const nextSync = { ...syncDraft, provider: opt.id };
+                  setSyncDraft(nextSync);
+                  if (opt.id === "none") {
+                    void onUpdateSettings({ ...settings, sync: nextSync });
+                  }
+                }}
+                className={`p-3 rounded-xl border text-left transition-all cursor-pointer ${
+                  active
+                    ? "border-[var(--accent)] bg-[var(--accent-soft)]"
+                    : "border-[var(--border-hairline)] bg-[var(--bg-subtle)] hover:border-[var(--border-strong)]"
+                }`}
+              >
+                <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-[var(--text-primary)]">
+                  {opt.id === "webdav" && <CloudSyncIcon size={14} />}
+                  {opt.id === "github" && <GitRepoIcon size={14} />}
+                  <span>{opt.title}</span>
+                </div>
+                <div className="text-[11px] text-[var(--text-muted)] mt-0.5">{opt.desc}</div>
+              </button>
+            );
+          })}
+        </div>
+
+        {/* WebDAV Configuration Form */}
+        {syncDraft.provider === "webdav" && (
+          <div className="flex flex-col gap-3 pt-2 border-t border-[var(--border-hairline)]">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[11.5px] text-[var(--text-muted)] mr-1">快捷填充地址：</span>
+              {WEBDAV_PRESETS.map((p) => (
+                <button
+                  key={p.label}
+                  type="button"
+                  onClick={() =>
+                    patchSync({ webdav: { ...syncDraft.webdav, server_url: p.url } })
+                  }
+                  className="px-2.5 py-1 rounded-lg text-[11px] font-medium bg-[var(--bg-subtle)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer"
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  WebDAV 服务器地址
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.webdav.server_url}
+                  onChange={(e) =>
+                    patchSync({ webdav: { ...syncDraft.webdav, server_url: e.target.value } })
+                  }
+                  placeholder="https://dav.jianguoyun.com/dav/"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  账号 / 用户名
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.webdav.username}
+                  onChange={(e) =>
+                    patchSync({ webdav: { ...syncDraft.webdav, username: e.target.value } })
+                  }
+                  placeholder="your-email@example.com"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                    应用专用密码
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    className="text-[11px] text-[var(--accent)] cursor-pointer"
+                  >
+                    {showSecret ? "隐藏" : "显示"}
+                  </button>
+                </div>
+                <input
+                  type={showSecret ? "text" : "password"}
+                  value={syncDraft.webdav.password}
+                  onChange={(e) =>
+                    patchSync({ webdav: { ...syncDraft.webdav, password: e.target.value } })
+                  }
+                  placeholder="建议使用网盘应用专用密码"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  远端同步子目录
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.webdav.remote_dir}
+                  onChange={(e) =>
+                    patchSync({ webdav: { ...syncDraft.webdav, remote_dir: e.target.value } })
+                  }
+                  placeholder="PrismTime"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  本机设备标识名
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.device_name}
+                  onChange={(e) => patchSync({ device_name: e.target.value })}
+                  placeholder="Windows-PC"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* GitHub Repository Configuration Form */}
+        {syncDraft.provider === "github" && (
+          <div className="flex flex-col gap-3 pt-2 border-t border-[var(--border-hairline)]">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  GitHub 用户名 / 组织（Owner）
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.github.owner}
+                  onChange={(e) =>
+                    patchSync({ github: { ...syncDraft.github, owner: e.target.value } })
+                  }
+                  placeholder="your-github-username"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  目标仓库名（强烈建议使用 Private 私有仓库）
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.github.repo}
+                  onChange={(e) =>
+                    patchSync({ github: { ...syncDraft.github, repo: e.target.value } })
+                  }
+                  placeholder="prismtime-sync-data"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  分支名称（Branch）
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.github.branch}
+                  onChange={(e) =>
+                    patchSync({ github: { ...syncDraft.github, branch: e.target.value } })
+                  }
+                  placeholder="main"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  仓库内数据目录前缀
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.github.path_prefix}
+                  onChange={(e) =>
+                    patchSync({ github: { ...syncDraft.github, path_prefix: e.target.value } })
+                  }
+                  placeholder="prismtime-sync"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                    Personal Access Token（需具备目标仓库 Contents Read &amp; Write 权限）
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setShowSecret((v) => !v)}
+                    className="text-[11px] text-[var(--accent)] cursor-pointer"
+                  >
+                    {showSecret ? "隐藏" : "显示"}
+                  </button>
+                </div>
+                <input
+                  type={showSecret ? "text" : "password"}
+                  value={syncDraft.github.token}
+                  onChange={(e) =>
+                    patchSync({ github: { ...syncDraft.github, token: e.target.value } })
+                  }
+                  placeholder="github_pat_... 或 ghp_..."
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+
+              <label className="flex flex-col gap-1 md:col-span-2">
+                <span className="text-[12px] font-medium text-[var(--text-secondary)]">
+                  本机设备标识名（写入 Commit 提交备注）
+                </span>
+                <input
+                  type="text"
+                  value={syncDraft.device_name}
+                  onChange={(e) => patchSync({ device_name: e.target.value })}
+                  placeholder="Windows-PC"
+                  className="px-3 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] focus:border-[var(--border-strong)] text-[12.5px] text-[var(--text-primary)] focus:outline-none select-text"
+                />
+              </label>
+            </div>
+          </div>
+        )}
+
+        {/* Shared Sync Toggles & Action Buttons */}
+        {syncDraft.provider !== "none" && (
+          <div className="flex flex-col gap-3.5 pt-3 border-t border-[var(--border-hairline)]">
+            <ToggleRow
+              title="同时同步自定义软件/进程规则"
+              desc="多设备共享自定义软件名称、归类、进程别名与忽略规则"
+              checked={syncDraft.sync_overrides}
+              onChange={(v) => patchSync({ sync_overrides: v })}
+            />
+
+            <ToggleRow
+              title="开启后台定时自动同步"
+              desc="按设定周期在后台静默合并会话记录（遵循 Windows 系统代理配置）"
+              checked={syncDraft.auto_sync_enabled}
+              onChange={(v) => patchSync({ auto_sync_enabled: v })}
+            />
+
+            {syncDraft.auto_sync_enabled && (
+              <div className="grid grid-cols-4 gap-1.5">
+                {SYNC_INTERVAL_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.mins}
+                    type="button"
+                    onClick={() => patchSync({ auto_sync_interval_mins: opt.mins })}
+                    className={`py-1.5 rounded-xl text-[12px] font-medium border transition-colors cursor-pointer ${
+                      syncDraft.auto_sync_interval_mins === opt.mins
+                        ? "bg-[var(--text-primary)] text-[var(--bg-surface)] border-transparent"
+                        : "bg-[var(--bg-subtle)] text-[var(--text-secondary)] border-[var(--border-hairline)] hover:text-[var(--text-primary)]"
+                    }`}
+                  >
+                    每 {opt.label}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <button
+                type="button"
+                onClick={() => void handleSaveSync()}
+                className="px-3.5 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-[12.5px] font-medium text-[var(--text-primary)] cursor-pointer"
+              >
+                保存配置
+              </button>
+              <button
+                type="button"
+                disabled={testing || syncing}
+                onClick={() => void handleTestSync()}
+                className="px-3.5 py-2 rounded-xl bg-[var(--bg-subtle)] border border-[var(--border-hairline)] hover:border-[var(--border-strong)] text-[12.5px] font-medium text-[var(--text-primary)] cursor-pointer disabled:opacity-60"
+              >
+                {testing ? "正在测试连通性..." : "测试连接"}
+              </button>
+              <button
+                type="button"
+                disabled={syncing || testing}
+                onClick={() => void handleRunSync()}
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[var(--accent)] text-white text-[12.5px] font-medium hover:opacity-90 cursor-pointer disabled:opacity-60"
+              >
+                <RefreshIcon size={13} className={syncing ? "animate-spin" : ""} />
+                <span>{syncing ? "正在双向同步..." : "立即双向同步"}</span>
+              </button>
+            </div>
+
+            {syncNotice && (
+              <div
+                className={`px-3.5 py-2.5 rounded-xl text-[12px] border select-text ${
+                  syncNotice.ok
+                    ? "bg-[#109e70]/10 border-[#109e70]/30 text-[var(--status-ok)]"
+                    : "bg-[#dc2626]/10 border-[#dc2626]/30 text-[#dc2626]"
+                }`}
+              >
+                {syncNotice.text}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Card 4: Local Storage & Data Export */}
       <div className="card-surface p-5 flex flex-col gap-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
@@ -191,7 +612,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               本地沙盒存储与报告导出
             </h3>
             <p className="text-[12px] text-[var(--text-secondary)] mt-0.5">
-              所有记录均以按日分片 JSONL 文件保存在本地磁盘，不进行任何云端遥测上传
+              所有记录均以按日分片 JSONL 文件保存在本地磁盘，未经您手动配置同步绝不向外传输数据
             </p>
           </div>
           <div className="flex items-center gap-2">
