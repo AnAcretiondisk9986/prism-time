@@ -92,6 +92,15 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
           <div className="border-t border-[var(--border-hairline)] pt-3">
             <ToggleRow
+              title="启用浏览器内网页识别统计"
+              desc="自动识别主流浏览器当前访问的网站与域名分类，仅在本地统计且不记录 URL 查询参数"
+              checked={settings.web_tracking_enabled}
+              onChange={(v) => patch({ web_tracking_enabled: v })}
+            />
+          </div>
+
+          <div className="border-t border-[var(--border-hairline)] pt-3">
+            <ToggleRow
               title="锁屏或进入安全桌面时暂停"
               desc="检测到 Win+L 锁屏或 UAC 安全桌面后立即封存当前时段"
               checked={settings.pause_on_lock}

@@ -412,6 +412,76 @@ pub const KNOWN_APPS: &[KnownAppRule] = &[
         path_contains: &["\\quark\\"],
         reg_keywords: &["夸克"],
     },
+    KnownAppRule {
+        app_id: "brave.browser",
+        display_name: "Brave",
+        category: AppCategory::Browser,
+        publisher: "Brave Software",
+        description: "主打隐私拦截与 Chromium 高性能浏览体验的浏览器",
+        exe_stems: &["brave"],
+        path_contains: &["bravesoftware\\brave-browser"],
+        reg_keywords: &["brave"],
+    },
+    KnownAppRule {
+        app_id: "thebrowsercompany.arc",
+        display_name: "Arc",
+        category: AppCategory::Browser,
+        publisher: "The Browser Company",
+        description: "聚焦空间分组与垂直标签体验的现代浏览器",
+        exe_stems: &["arc"],
+        path_contains: &["thebrowsercompany.arc"],
+        reg_keywords: &["arc"],
+    },
+    KnownAppRule {
+        app_id: "vivaldi.browser",
+        display_name: "Vivaldi",
+        category: AppCategory::Browser,
+        publisher: "Vivaldi Technologies",
+        description: "高度可定制的效率型多面板网页浏览器",
+        exe_stems: &["vivaldi"],
+        path_contains: &["vivaldi"],
+        reg_keywords: &["vivaldi"],
+    },
+    KnownAppRule {
+        app_id: "opera.browser",
+        display_name: "Opera",
+        category: AppCategory::Browser,
+        publisher: "Opera Software",
+        description: "集成侧边工具栏与内置生产力模块的网页浏览器",
+        exe_stems: &["opera"],
+        path_contains: &["\\opera"],
+        reg_keywords: &["opera"],
+    },
+    KnownAppRule {
+        app_id: "zen.browser",
+        display_name: "Zen Browser",
+        category: AppCategory::Browser,
+        publisher: "Zen Team",
+        description: "基于 Firefox 内核的极简无干扰专注浏览器",
+        exe_stems: &["zen"],
+        path_contains: &["zen browser"],
+        reg_keywords: &["zen browser"],
+    },
+    KnownAppRule {
+        app_id: "qihoo.360chrome",
+        display_name: "360 浏览器",
+        category: AppCategory::Browser,
+        publisher: "奇虎 360",
+        description: "支持双核切换与扩展生态的中文网页浏览器",
+        exe_stems: &["360chrome", "360chromex", "360se"],
+        path_contains: &["360chrome", "360se"],
+        reg_keywords: &["360极速浏览器", "360安全浏览器"],
+    },
+    KnownAppRule {
+        app_id: "tencent.qqbrowser",
+        display_name: "QQ 浏览器",
+        category: AppCategory::Browser,
+        publisher: "腾讯科技",
+        description: "集成高速上网、文档阅读与标签管理的浏览器",
+        exe_stems: &["qqbrowser"],
+        path_contains: &["qqbrowser"],
+        reg_keywords: &["qq浏览器"],
+    },
 
     // --- 设计创意 (Design) ---
     KnownAppRule {
@@ -1423,6 +1493,32 @@ pub fn is_ignored_process(exe_stem_lower: &str, exe_path_lower: &str, window_cla
 
 pub fn is_lock_screen_process(exe_stem_lower: &str) -> bool {
     matches!(exe_stem_lower, "lockapp" | "logonui")
+}
+
+pub fn is_browser_stem(exe_stem_lower: &str) -> bool {
+    matches!(
+        exe_stem_lower,
+        "msedge"
+            | "chrome"
+            | "ego"
+            | "firefox"
+            | "quark"
+            | "brave"
+            | "arc"
+            | "vivaldi"
+            | "opera"
+            | "zen"
+            | "360chrome"
+            | "360chromex"
+            | "360se"
+            | "qqbrowser"
+            | "sogouexplorer"
+            | "chromium"
+            | "waterfox"
+            | "librewolf"
+            | "floorp"
+            | "thorium"
+    )
 }
 
 pub fn match_known_app(

@@ -1,12 +1,12 @@
 import React from "react";
 import type { DashboardAnalyticsDto, RangeOption } from "../types";
-import { CATEGORY_MAP } from "../types";
+import { CATEGORY_MAP, WEB_CATEGORY_MAP } from "../types";
 import { formatDuration } from "../lib/format";
 import { AppAvatar } from "./AppAvatar";
 import { CategoryDonutChart } from "./charts/CategoryDonutChart";
 import { HourlyStackedChart } from "./charts/HourlyStackedChart";
 import { SessionSwimlaneChart } from "./charts/SessionSwimlaneChart";
-import { ChevronRightIcon } from "./Icons";
+import { ChevronRightIcon, WebCategorySvgIcon } from "./Icons";
 
 interface OverviewViewProps {
   analytics: DashboardAnalyticsDto;
@@ -15,6 +15,7 @@ interface OverviewViewProps {
   onSelectApp: (appId: string) => void;
   onEnableDemo: () => void;
   onGoToTimeline: () => void;
+  onGoToWeb: () => void;
 }
 
 const RANGE_OPTIONS: Array<{ id: RangeOption; label: string }> = [
@@ -31,6 +32,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
   onSelectApp,
   onEnableDemo,
   onGoToTimeline,
+  onGoToWeb,
 }) => {
   const showEmptyHint = !analytics.has_real_data && !analytics.demo_mode && analytics.total_secs < 10;
 
@@ -300,6 +302,69 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           </div>
         )}
       </div>
+
+      {/* Browser Inner Web Highlights Quick Card */}
+      {analytics.web_analytics.sites.length > 0 && (
+        <div className="card-surface p-5 flex flex-col gap-3.5">
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <h3 className="text-[14px] font-semibold text-[var(--text-primary)] tracking-tight">
+                浏览器内热门网站速览
+              </h3>
+              <p className="text-[12px] text-[var(--text-secondary)] mt-0.5 tabular-nums">
+                网页浏览累计 {formatDuration(analytics.web_analytics.total_secs, true)} · 占总屏幕{" "}
+                {analytics.web_analytics.share_of_screen_pct.toFixed(1)}% · 识别{" "}
+                {analytics.web_analytics.active_site_count} 个站点
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={onGoToWeb}
+              className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-[12px] font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] hover:bg-[var(--bg-subtle)] transition-colors cursor-pointer"
+            >
+              <span>查看完整网页洞察</span>
+              <ChevronRightIcon size={14} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-3">
+            {analytics.web_analytics.sites.slice(0, 4).map((site) => {
+              const cat = WEB_CATEGORY_MAP[site.category];
+              return (
+                <button
+                  key={site.site_id}
+                  type="button"
+                  onClick={onGoToWeb}
+                  className="text-left p-3.5 rounded-xl bg-[var(--bg-subtle)]/60 border border-[var(--border-hairline)] hover:border-[var(--border-strong)] transition-colors flex flex-col justify-between gap-2 cursor-pointer"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className="w-7 h-7 rounded-lg flex items-center justify-center shrink-0"
+                      style={{ backgroundColor: `${cat.color}18`, color: cat.color }}
+                    >
+                      <WebCategorySvgIcon category={site.category} size={14} />
+                    </span>
+                    <div className="min-w-0">
+                      <div className="text-[13px] font-semibold text-[var(--text-primary)] truncate">
+                        {site.display_name}
+                      </div>
+                      <div className="text-[10.5px] font-mono text-[var(--text-muted)] truncate">
+                        {site.domain}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between text-[11.5px] tabular-nums">
+                    <span className="font-semibold text-[var(--text-primary)]">
+                      {formatDuration(site.total_secs, true)}
+                    </span>
+                    <span className="text-[var(--text-muted)]">{site.percentage.toFixed(1)}%</span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 };

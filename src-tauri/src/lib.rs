@@ -5,18 +5,21 @@ mod demo;
 mod models;
 mod scanner;
 mod storage;
+mod web_catalog;
 mod win_probe;
 
 use crate::catalog::{
-    apply_override, extract_process_stem, is_ignored_process, is_lock_screen_process,
-    resolve_observed_app, SELF_APP_ID,
+    apply_override, extract_process_stem, is_browser_stem, is_ignored_process,
+    is_lock_screen_process, resolve_observed_app, SELF_APP_ID,
 };
 use crate::commands::{RuntimeTrackerState, SharedAppState};
 use crate::models::{AppCategory, UsageSession};
 use crate::scanner::scan_installed_software;
 use crate::storage::Storage;
+use crate::web_catalog::resolve_browser_page;
 use crate::win_probe::{
-    extract_icon_png_data_url, get_idle_seconds, is_workstation_locked, probe_foreground_window,
+    extract_icon_png_data_url, get_idle_seconds, is_workstation_locked, probe_browser_omnibox_url,
+    probe_foreground_window,
 };
 use chrono::{Local, TimeZone};
 use std::sync::{Arc, Mutex};
@@ -38,6 +41,7 @@ fn flush_active_session(state: &SharedAppState, session: Option<UsageSession>) {
 fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
     thread::spawn(move || {
         let mut checkpoint_ticks: u64 = 0;
+        let mut browser_url_cache: Option<(isize, String, u8, Option<String>)> = None;
 
         loop {
             thread::sleep(Duration::from_secs(1));
@@ -210,11 +214,44 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
                 continue;
             }
 
-            let sample_title = if sample.window_title.trim().is_empty() {
+            let is_browser = resolved.category == AppCategory::Browser
+                || is_browser_stem(&sample.exe_stem_lower);
+            let web_page = if is_browser && settings.web_tracking_enabled {
+                let cached_url = match &browser_url_cache {
+                    Some((cached_hwnd, cached_title, age, url))
+                        if *cached_hwnd == sample.hwnd_key
+                            && cached_title == &sample.window_title
+                            && *age < 4 =>
+                    {
+                        let next_url = url.clone();
+                        browser_url_cache =
+                            Some((*cached_hwnd, cached_title.clone(), age + 1, next_url.clone()));
+                        next_url
+                    }
+                    _ => {
+                        let fresh = probe_browser_omnibox_url(sample.hwnd_key);
+                        browser_url_cache = Some((
+                            sample.hwnd_key,
+                            sample.window_title.clone(),
+                            0,
+                            fresh.clone(),
+                        ));
+                        fresh
+                    }
+                };
+                Some(resolve_browser_page(cached_url.as_deref(), &sample.window_title))
+            } else {
+                None
+            };
+
+            let raw_title_source = web_page
+                .as_ref()
+                .and_then(|w| w.clean_page_title.as_deref())
+                .unwrap_or(sample.window_title.as_str());
+            let sample_title = if raw_title_source.trim().is_empty() {
                 None
             } else {
-                let t = sample.window_title.trim();
-                let truncated: String = t.chars().take(72).collect();
+                let truncated: String = raw_title_source.trim().chars().take(72).collect();
                 Some(truncated)
             };
 
@@ -226,13 +263,16 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
                 rt.state_code = "active".to_string();
                 rt.idle_secs = idle_secs;
 
+                let next_web_site_id = web_page.as_ref().map(|w| w.site_id.clone());
                 let same_app_and_day = rt.active_session.as_ref().is_some_and(|cur| {
                     let cur_day = Local
                         .timestamp_opt(cur.start_ts, 0)
                         .single()
                         .map(|d| d.format("%Y-%m-%d").to_string())
                         .unwrap_or_default();
-                    cur.app_id == resolved.app_id && cur_day == today_str
+                    cur.app_id == resolved.app_id
+                        && cur.web_site_id == next_web_site_id
+                        && cur_day == today_str
                 });
 
                 if same_app_and_day {
@@ -258,6 +298,10 @@ fn spawn_monitor_thread(shared: Arc<SharedAppState>) {
                         end_ts: now_ts + 1,
                         duration_secs: 1,
                         sample_title,
+                        web_site_id: web_page.as_ref().map(|w| w.site_id.clone()),
+                        web_site_name: web_page.as_ref().map(|w| w.display_name.clone()),
+                        web_domain: web_page.as_ref().map(|w| w.domain.clone()),
+                        web_category: web_page.as_ref().map(|w| w.category),
                     };
                     checkpoint_copy = Some(new_session.clone());
                     rt.active_session = Some(new_session);

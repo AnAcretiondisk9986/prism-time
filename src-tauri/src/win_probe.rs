@@ -2,6 +2,7 @@
 pub struct ForegroundSample {
     #[allow(dead_code)]
     pub pid: u32,
+    pub hwnd_key: isize,
     pub exe_path: String,
     pub exe_stem_lower: String,
     pub window_title: String,
@@ -15,8 +16,11 @@ pub struct ForegroundSample {
 mod win_impl {
     use super::ForegroundSample;
     use crate::catalog::extract_exe_stem;
+    use crate::web_catalog::extract_sanitized_host;
     use base64::engine::general_purpose::STANDARD as BASE64;
     use base64::Engine;
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
     use std::ffi::OsStr;
     use std::mem::{size_of, zeroed};
     use std::os::windows::ffi::OsStrExt;
@@ -30,6 +34,9 @@ mod win_impl {
     use windows::Win32::Storage::FileSystem::{
         GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW, FILE_FLAGS_AND_ATTRIBUTES,
     };
+    use windows::Win32::System::Com::{
+        CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
+    };
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
@@ -41,6 +48,11 @@ mod win_impl {
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::Accessibility::{
+        CUIAutomation, IUIAutomation, IUIAutomationElement, IUIAutomationTreeWalker,
+        IUIAutomationValuePattern, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+        UIA_ValuePatternId,
     };
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetLastInputInfo, LASTINPUTINFO};
     use windows::Win32::UI::Shell::{SHGetFileInfoW, SHFILEINFOW, SHGFI_ICON, SHGFI_LARGEICON};
@@ -232,6 +244,7 @@ mod win_impl {
 
             Some(ForegroundSample {
                 pid,
+                hwnd_key: hwnd.0 as isize,
                 exe_path,
                 exe_stem_lower: stem,
                 window_title: title,
@@ -472,6 +485,126 @@ mod win_impl {
         }
         Some(format!("data:image/png;base64,{}", BASE64.encode(&png_bytes)))
     }
+
+    struct UiaThreadCtx {
+        uia: IUIAutomation,
+        walker: IUIAutomationTreeWalker,
+    }
+
+    thread_local! {
+        static UIA_CTX: RefCell<Option<UiaThreadCtx>> = const { RefCell::new(None) };
+    }
+
+    fn with_uia<F, R>(f: F) -> Option<R>
+    where
+        F: FnOnce(&IUIAutomation, &IUIAutomationTreeWalker) -> Option<R>,
+    {
+        UIA_CTX.with(|slot| {
+            let mut borrow = slot.borrow_mut();
+            if borrow.is_none() {
+                unsafe {
+                    let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+                    let uia: IUIAutomation =
+                        CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+                    let walker = uia.ControlViewWalker().ok()?;
+                    *borrow = Some(UiaThreadCtx { uia, walker });
+                }
+            }
+            let ctx = borrow.as_ref()?;
+            f(&ctx.uia, &ctx.walker)
+        })
+    }
+
+    fn is_likely_omnibox_control(cls_lower: &str, name_lower: &str) -> bool {
+        cls_lower.contains("omnibox")
+            || cls_lower.contains("moz-input")
+            || cls_lower.contains("urlbar")
+            || name_lower.contains("address")
+            || name_lower.contains("search or enter")
+            || name_lower.contains("search bar")
+            || name_lower.contains("url")
+            || name_lower.contains("地址")
+            || name_lower.contains("搜索和输入网址")
+            || name_lower.contains("搜索或输入网址")
+    }
+
+    pub fn probe_browser_omnibox_url(hwnd_key: isize) -> Option<String> {
+        if hwnd_key == 0 {
+            return None;
+        }
+        with_uia(|uia, walker| unsafe {
+            let hwnd = HWND(hwnd_key as *mut core::ffi::c_void);
+            let root = uia.ElementFromHandle(hwnd).ok()?;
+
+            const MAX_NODES: usize = 96;
+            const MAX_DEPTH: usize = 7;
+            const MAX_SIBLINGS: usize = 24;
+
+            let mut queue: VecDeque<(IUIAutomationElement, usize)> = VecDeque::new();
+            queue.push_back((root, 0));
+            let mut visited = 0usize;
+            let mut fallback_url_candidate: Option<String> = None;
+
+            while let Some((elem, depth)) = queue.pop_front() {
+                visited += 1;
+                if visited > MAX_NODES {
+                    break;
+                }
+
+                let ctrl_type = elem.CurrentControlType().unwrap_or_default();
+                let cls = elem
+                    .CurrentClassName()
+                    .map(|b| b.to_string())
+                    .unwrap_or_default();
+                let cls_lower = cls.to_ascii_lowercase();
+
+                // Never traverse into live browser page DOM containers
+                if ctrl_type == UIA_DocumentControlTypeId
+                    || cls_lower.contains("renderwidgethost")
+                    || cls_lower.contains("intermediate d3d")
+                {
+                    continue;
+                }
+
+                if ctrl_type == UIA_EditControlTypeId {
+                    if let Ok(pattern) =
+                        elem.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                    {
+                        if let Ok(val_bstr) = pattern.CurrentValue() {
+                            let val = val_bstr.to_string().trim().to_string();
+                            if extract_sanitized_host(&val).is_some() {
+                                let name_lower = elem
+                                    .CurrentName()
+                                    .map(|b| b.to_string().to_lowercase())
+                                    .unwrap_or_default();
+                                if is_likely_omnibox_control(&cls_lower, &name_lower) {
+                                    return Some(val);
+                                }
+                                if fallback_url_candidate.is_none() {
+                                    fallback_url_candidate = Some(val);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if depth < MAX_DEPTH {
+                    if let Ok(mut child) = walker.GetFirstChildElement(&elem) {
+                        for _ in 0..MAX_SIBLINGS {
+                            let next = walker.GetNextSiblingElement(&child);
+                            queue.push_back((child, depth + 1));
+                            match next {
+                                Ok(sib) => child = sib,
+                                Err(_) => break,
+                            }
+                        }
+                    }
+                }
+            }
+
+            fallback_url_candidate
+        })
+    }
 }
 
 #[cfg(not(windows))]
@@ -486,6 +619,9 @@ mod win_impl {
     pub fn probe_foreground_window() -> Option<ForegroundSample> {
         None
     }
+    pub fn probe_browser_omnibox_url(_: isize) -> Option<String> {
+        None
+    }
     pub fn read_pe_version_strings(_: &str) -> (Option<String>, Option<String>, Option<String>) {
         (None, None, None)
     }
@@ -495,5 +631,6 @@ mod win_impl {
 }
 
 pub use win_impl::{
-    extract_icon_png_data_url, get_idle_seconds, is_workstation_locked, probe_foreground_window,
+    extract_icon_png_data_url, get_idle_seconds, is_workstation_locked,
+    probe_browser_omnibox_url, probe_foreground_window,
 };

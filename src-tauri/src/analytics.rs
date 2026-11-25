@@ -1,9 +1,12 @@
 use crate::catalog::{humanize_fallback_name, infer_category_from_hints};
 use crate::models::{
-    AppCategory, AppDetailDto, AppMetadata, AppUsageSummaryDto, CategoryStatDto,
+    AppCategory, AppDetailDto, AppMetadata, AppUsageSummaryDto, BrowserCarrierDto, CategoryStatDto,
     DailyTrendPointDto, DashboardAnalyticsDto, HourTopAppDto, HourlyCategoryBucketDto,
-    PeriodBucketDto, SessionEventDto, SwimlaneRowDto, SwimlaneSegmentDto, UsageSession,
+    HourlyWebBucketDto, PeriodBucketDto, SessionEventDto, SwimlaneRowDto, SwimlaneSegmentDto,
+    UsageSession, WebAnalyticsDto, WebCategory, WebCategoryStatDto, WebHourTopSiteDto,
+    WebSiteSummaryDto,
 };
+use crate::web_catalog::resolve_browser_page;
 use chrono::{Duration, Local, NaiveDate, TimeZone, Timelike};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -74,6 +77,27 @@ fn resolve_meta(app_id: &str, catalog: &HashMap<String, AppMetadata>) -> AppMeta
         ignored: false,
         last_seen_ts: None,
     }
+}
+
+fn resolve_session_web_info(
+    session: &UsageSession,
+    meta: &AppMetadata,
+) -> Option<(String, String, String, WebCategory)> {
+    if let (Some(sid), Some(sname), Some(dom), Some(cat)) = (
+        &session.web_site_id,
+        &session.web_site_name,
+        &session.web_domain,
+        session.web_category,
+    ) {
+        return Some((sid.clone(), sname.clone(), dom.clone(), cat));
+    }
+    if meta.category == AppCategory::Browser {
+        if let Some(ref title) = session.sample_title {
+            let page = resolve_browser_page(None, title);
+            return Some((page.site_id, page.display_name, page.domain, page.category));
+        }
+    }
+    None
 }
 
 fn format_hms(ts: i64) -> String {
@@ -190,6 +214,29 @@ pub fn build_dashboard_analytics(
     let mut all_events: Vec<SessionEventDto> = Vec::new();
     let mut day_segments_raw: Vec<SwimlaneSegmentDto> = Vec::new();
 
+    // Web browsing accumulators
+    let mut web_total_secs: i64 = 0;
+    let mut web_session_count: usize = 0;
+    let mut web_hourly_cat_secs: Vec<BTreeMap<WebCategory, i64>> = vec![BTreeMap::new(); 24];
+    let mut web_hourly_site_secs: Vec<HashMap<String, i64>> = vec![HashMap::new(); 24];
+    let mut web_hourly_totals: Vec<i64> = vec![0; 24];
+    let mut web_cat_totals: HashMap<WebCategory, i64> = HashMap::new();
+    let mut web_cat_sites: HashMap<WebCategory, HashSet<String>> = HashMap::new();
+    let mut browser_carriers: HashMap<String, (AppMetadata, i64)> = HashMap::new();
+    struct WebSiteAcc {
+        site_id: String,
+        display_name: String,
+        domain: String,
+        category: WebCategory,
+        total_secs: i64,
+        session_count: usize,
+        browsers: HashSet<String>,
+        ranges: Vec<(i64, i64)>,
+        last_seen: i64,
+    }
+    let mut web_site_accs: HashMap<String, WebSiteAcc> = HashMap::new();
+    let mut recent_web_sessions: Vec<SessionEventDto> = Vec::new();
+
     for &d in &target_dates {
         let (day_start, day_end) = local_day_bounds(d);
         let Some(day_sessions) = sessions_by_date.get(&d) else {
@@ -236,6 +283,39 @@ pub fn build_dashboard_analytics(
                 acc.ranges.push((cs, ce));
             }
 
+            let web_info = resolve_session_web_info(s, &meta);
+            if let Some((ref w_sid, ref w_name, ref w_dom, w_cat)) = web_info {
+                web_total_secs += dur;
+                web_session_count += 1;
+                *web_cat_totals.entry(w_cat).or_insert(0) += dur;
+                web_cat_sites.entry(w_cat).or_default().insert(w_sid.clone());
+                let carrier = browser_carriers
+                    .entry(meta.app_id.clone())
+                    .or_insert_with(|| (meta.clone(), 0));
+                carrier.1 += dur;
+
+                let w_acc = web_site_accs
+                    .entry(w_sid.clone())
+                    .or_insert_with(|| WebSiteAcc {
+                        site_id: w_sid.clone(),
+                        display_name: w_name.clone(),
+                        domain: w_dom.clone(),
+                        category: w_cat,
+                        total_secs: 0,
+                        session_count: 0,
+                        browsers: HashSet::new(),
+                        ranges: Vec::new(),
+                        last_seen: 0,
+                    });
+                w_acc.total_secs += dur;
+                w_acc.session_count += 1;
+                w_acc.browsers.insert(meta.display_name.clone());
+                w_acc.last_seen = w_acc.last_seen.max(ce);
+                if d == focus_date && dur >= 10 {
+                    w_acc.ranges.push((cs, ce));
+                }
+            }
+
             // Slice across 24 hours of this day cleanly
             let cat_arr = cat_hourly.entry(meta.category).or_insert([0; 24]);
             for h in 0..24usize {
@@ -248,6 +328,12 @@ pub fn build_dashboard_analytics(
                     *hourly_app_secs[h].entry(meta.app_id.clone()).or_insert(0) += ov;
                     cat_arr[h] += ov;
                     acc.hour_secs[h] += ov;
+
+                    if let Some((ref w_sid, _, _, w_cat)) = web_info {
+                        web_hourly_totals[h] += ov;
+                        *web_hourly_cat_secs[h].entry(w_cat).or_insert(0) += ov;
+                        *web_hourly_site_secs[h].entry(w_sid.clone()).or_insert(0) += ov;
+                    }
                 }
             }
 
@@ -268,7 +354,7 @@ pub fn build_dashboard_analytics(
                 day_segments_raw.push(seg);
             }
 
-            all_events.push(SessionEventDto {
+            let ev = SessionEventDto {
                 id: s.id.clone(),
                 app_id: meta.app_id.clone(),
                 display_name: meta.display_name.clone(),
@@ -285,7 +371,15 @@ pub fn build_dashboard_analytics(
                 end_time_label: format_hms(ce),
                 duration_secs: dur,
                 sample_title: s.sample_title.clone(),
-            });
+                web_site_id: web_info.as_ref().map(|w| w.0.clone()),
+                web_site_name: web_info.as_ref().map(|w| w.1.clone()),
+                web_domain: web_info.as_ref().map(|w| w.2.clone()),
+                web_category: web_info.as_ref().map(|w| w.3),
+            };
+            if web_info.is_some() {
+                recent_web_sessions.push(ev.clone());
+            }
+            all_events.push(ev);
         }
     }
 
@@ -485,6 +579,137 @@ pub fn build_dashboard_analytics(
     // Recent sessions descending
     all_events.sort_by(|a, b| b.start_ts.cmp(&a.start_ts));
     all_events.truncate(80);
+    recent_web_sessions.sort_by(|a, b| b.start_ts.cmp(&a.start_ts));
+    recent_web_sessions.truncate(60);
+
+    // Build WebAnalyticsDto
+    let mut web_categories: Vec<WebCategoryStatDto> = WebCategory::all()
+        .iter()
+        .filter_map(|&wcat| {
+            let secs = *web_cat_totals.get(&wcat).unwrap_or(&0);
+            if secs <= 0 {
+                return None;
+            }
+            let pct = if web_total_secs > 0 {
+                ((secs as f64 / web_total_secs as f64) * 1000.0).round() / 10.0
+            } else {
+                0.0
+            };
+            Some(WebCategoryStatDto {
+                category: wcat,
+                label: wcat.label().to_string(),
+                color: wcat.color().to_string(),
+                total_secs: secs,
+                percentage: pct,
+                site_count: web_cat_sites.get(&wcat).map(|s| s.len()).unwrap_or(0),
+            })
+        })
+        .collect();
+    web_categories.sort_by(|a, b| b.total_secs.cmp(&a.total_secs));
+    let web_dominant_category = web_categories.first().cloned();
+
+    let mut web_browsers: Vec<BrowserCarrierDto> = browser_carriers
+        .into_values()
+        .map(|(m, secs)| {
+            let pct = if web_total_secs > 0 {
+                ((secs as f64 / web_total_secs as f64) * 1000.0).round() / 10.0
+            } else {
+                0.0
+            };
+            BrowserCarrierDto {
+                app_id: m.app_id,
+                display_name: m.display_name,
+                icon_data_url: m.icon_data_url,
+                total_secs: secs,
+                percentage: pct,
+            }
+        })
+        .collect();
+    web_browsers.sort_by(|a, b| b.total_secs.cmp(&a.total_secs));
+
+    let web_hourly: Vec<HourlyWebBucketDto> = (0..24)
+        .map(|h| {
+            let mut top_sites: Vec<WebHourTopSiteDto> = web_hourly_site_secs[h]
+                .iter()
+                .filter_map(|(sid, &secs)| {
+                    let acc = web_site_accs.get(sid)?;
+                    Some(WebHourTopSiteDto {
+                        site_id: sid.clone(),
+                        display_name: acc.display_name.clone(),
+                        category: acc.category,
+                        duration_secs: secs,
+                    })
+                })
+                .collect();
+            top_sites.sort_by(|a, b| b.duration_secs.cmp(&a.duration_secs));
+            top_sites.truncate(3);
+
+            HourlyWebBucketDto {
+                hour: h as u8,
+                label: format!("{h:02}:00"),
+                total_secs: web_hourly_totals[h],
+                by_category: web_hourly_cat_secs[h].clone(),
+                top_sites,
+            }
+        })
+        .collect();
+
+    let mut web_sites: Vec<WebSiteSummaryDto> = web_site_accs
+        .into_values()
+        .map(|mut w_acc| {
+            let pct = if web_total_secs > 0 {
+                ((w_acc.total_secs as f64 / web_total_secs as f64) * 1000.0).round() / 10.0
+            } else {
+                0.0
+            };
+            w_acc.ranges.sort_by_key(|r| r.0);
+            let merged_ranges = merge_time_ranges(&w_acc.ranges, 90);
+            let preview: Vec<String> = merged_ranges
+                .into_iter()
+                .take(4)
+                .map(|(s, e)| format!("{}-{}", format_hm(s), format_hm(e)))
+                .collect();
+            let mut browsers_list: Vec<String> = w_acc.browsers.into_iter().collect();
+            browsers_list.sort();
+
+            WebSiteSummaryDto {
+                site_id: w_acc.site_id,
+                display_name: w_acc.display_name,
+                domain: w_acc.domain,
+                category: w_acc.category,
+                total_secs: w_acc.total_secs,
+                percentage: pct,
+                session_count: w_acc.session_count,
+                browsers: browsers_list,
+                active_ranges_preview: preview,
+                last_seen_ts: Some(w_acc.last_seen),
+            }
+        })
+        .collect();
+    web_sites.sort_by(|a, b| b.total_secs.cmp(&a.total_secs));
+
+    let web_share_pct = if total_secs > 0 {
+        ((web_total_secs as f64 / total_secs as f64) * 1000.0).round() / 10.0
+    } else {
+        0.0
+    };
+    let top_site = web_sites.first();
+
+    let web_analytics = WebAnalyticsDto {
+        total_secs: web_total_secs,
+        share_of_screen_pct: web_share_pct,
+        active_site_count: web_sites.len(),
+        session_count: web_session_count,
+        top_site_name: top_site.map(|s| s.display_name.clone()),
+        top_site_domain: top_site.map(|s| s.domain.clone()),
+        top_site_secs: top_site.map(|s| s.total_secs).unwrap_or(0),
+        dominant_category: web_dominant_category,
+        categories: web_categories,
+        browsers: web_browsers,
+        hourly: web_hourly,
+        sites: web_sites,
+        recent_web_sessions,
+    };
 
     DashboardAnalyticsDto {
         range: range.to_string(),
@@ -509,6 +734,7 @@ pub fn build_dashboard_analytics(
         daily_trend,
         top_apps,
         recent_sessions: all_events,
+        web_analytics,
     }
 }
 
@@ -553,6 +779,7 @@ pub fn build_app_detail(
                         hourly_secs[h] += ov;
                     }
                 }
+                let web_info = resolve_session_web_info(s, &meta);
                 events.push(SessionEventDto {
                     id: s.id.clone(),
                     app_id: meta.app_id.clone(),
@@ -570,6 +797,10 @@ pub fn build_app_detail(
                     end_time_label: format_hms(ce),
                     duration_secs: dur,
                     sample_title: s.sample_title.clone(),
+                    web_site_id: web_info.as_ref().map(|w| w.0.clone()),
+                    web_site_name: web_info.as_ref().map(|w| w.1.clone()),
+                    web_domain: web_info.as_ref().map(|w| w.2.clone()),
+                    web_category: web_info.as_ref().map(|w| w.3),
                 });
             }
         }
@@ -794,6 +1025,10 @@ mod tests {
                 end_ts,
                 duration_secs: end_ts - start_ts,
                 sample_title: Some("prism-time".to_string()),
+                web_site_id: None,
+                web_site_name: None,
+                web_domain: None,
+                web_category: None,
             }],
         );
 
@@ -825,5 +1060,80 @@ mod tests {
         let period_sum: i64 = dto.periods.iter().map(|p| p.total_secs).sum();
         assert_eq!(hourly_sum, dto.total_secs);
         assert_eq!(period_sum, dto.total_secs);
+    }
+
+    #[test]
+    fn web_analytics_aggregates_browser_sites_and_conserves_seconds() {
+        let day = NaiveDate::from_ymd_opt(2026, 11, 25).unwrap();
+        let t1_s = Local.from_local_datetime(&day.and_hms_opt(9, 50, 0).unwrap()).single().unwrap().timestamp();
+        let t1_e = Local.from_local_datetime(&day.and_hms_opt(10, 20, 0).unwrap()).single().unwrap().timestamp();
+        let t2_s = Local.from_local_datetime(&day.and_hms_opt(20, 0, 0).unwrap()).single().unwrap().timestamp();
+        let t2_e = Local.from_local_datetime(&day.and_hms_opt(20, 45, 0).unwrap()).single().unwrap().timestamp();
+
+        let mut sessions_by_date = HashMap::new();
+        sessions_by_date.insert(
+            day,
+            vec![
+                UsageSession {
+                    id: "w-1".to_string(),
+                    app_id: "microsoft.edge".to_string(),
+                    process_name: Some("msedge".to_string()),
+                    start_ts: t1_s,
+                    end_ts: t1_e,
+                    duration_secs: t1_e - t1_s,
+                    sample_title: Some("tauri-apps/tauri".to_string()),
+                    web_site_id: Some("web.github".to_string()),
+                    web_site_name: Some("GitHub".to_string()),
+                    web_domain: Some("github.com".to_string()),
+                    web_category: Some(WebCategory::DevTech),
+                },
+                UsageSession {
+                    id: "w-2".to_string(),
+                    app_id: "google.chrome".to_string(),
+                    process_name: Some("chrome".to_string()),
+                    start_ts: t2_s,
+                    end_ts: t2_e,
+                    duration_secs: t2_e - t2_s,
+                    sample_title: Some("Rust 工程实践 - 哔哩哔哩 - Google Chrome".to_string()),
+                    web_site_id: None,
+                    web_site_name: None,
+                    web_domain: None,
+                    web_category: None,
+                },
+            ],
+        );
+
+        let mut catalog = HashMap::new();
+        for (aid, name) in [("microsoft.edge", "Microsoft Edge"), ("google.chrome", "Google Chrome")] {
+            catalog.insert(
+                aid.to_string(),
+                AppMetadata {
+                    app_id: aid.to_string(),
+                    display_name: name.to_string(),
+                    category: AppCategory::Browser,
+                    description: "Browser".to_string(),
+                    publisher: "Vendor".to_string(),
+                    icon_data_url: None,
+                    exe_paths: vec![],
+                    process_names: vec![],
+                    source: "known".to_string(),
+                    installed: true,
+                    ignored: false,
+                    last_seen_ts: None,
+                },
+            );
+        }
+
+        let dto = build_dashboard_analytics("custom", day, day, &sessions_by_date, &catalog, false, true);
+        let web = &dto.web_analytics;
+        assert_eq!(web.total_secs, 75 * 60);
+        assert_eq!(web.active_site_count, 2);
+        assert_eq!(web.top_site_name.as_deref(), Some("哔哩哔哩"));
+        assert_eq!(web.browsers.len(), 2);
+        assert_eq!(web.hourly[9].total_secs, 10 * 60);
+        assert_eq!(web.hourly[10].total_secs, 20 * 60);
+        assert_eq!(web.hourly[20].total_secs, 45 * 60);
+        let web_hourly_sum: i64 = web.hourly.iter().map(|h| h.total_secs).sum();
+        assert_eq!(web_hourly_sum, web.total_secs);
     }
 }

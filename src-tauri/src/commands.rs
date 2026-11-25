@@ -103,7 +103,7 @@ pub fn get_live_status(state: State<'_, Arc<SharedAppState>>) -> LiveStatusDto {
         .map(|s| s.duration_secs.max(0))
         .sum();
 
-    let (app_id, app_name, cat, cat_label, icon, sess_secs) =
+    let (app_id, app_name, cat, cat_label, icon, web_site, web_domain, sess_secs) =
         if let Some(ref active) = runtime.active_session {
             let meta = catalog.get(&active.app_id);
             (
@@ -112,10 +112,12 @@ pub fn get_live_status(state: State<'_, Arc<SharedAppState>>) -> LiveStatusDto {
                 meta.map(|m| m.category),
                 meta.map(|m| m.category.label().to_string()),
                 meta.and_then(|m| m.icon_data_url.clone()),
+                active.web_site_name.clone(),
+                active.web_domain.clone(),
                 active.duration_secs,
             )
         } else {
-            (None, None, None, None, None, 0)
+            (None, None, None, None, None, None, None, 0)
         };
 
     LiveStatusDto {
@@ -126,6 +128,8 @@ pub fn get_live_status(state: State<'_, Arc<SharedAppState>>) -> LiveStatusDto {
         current_category: cat,
         current_category_label: cat_label,
         current_icon_data_url: icon,
+        current_web_site: web_site,
+        current_web_domain: web_domain,
         current_session_secs: sess_secs,
         today_total_secs,
         idle_secs: runtime.idle_secs,
@@ -394,7 +398,7 @@ pub fn export_usage_report(
         let json = serde_json::to_string_pretty(&analytics).map_err(|e| e.to_string())?;
         (json, analytics.recent_sessions.len())
     } else {
-        let mut csv = String::from("\u{FEFF}日期,开始时间,结束时间,持续秒数,软件名称,进程名,类别,窗口摘要\n");
+        let mut csv = String::from("\u{FEFF}日期,开始时间,结束时间,持续秒数,软件名称,进程名,类别,访问站点,站点域名,窗口摘要\n");
         for ev in &analytics.recent_sessions {
             let title = ev
                 .sample_title
@@ -407,8 +411,18 @@ pub fn export_usage_report(
                 .as_deref()
                 .unwrap_or("")
                 .replace('"', "\"\"");
+            let web_name = ev
+                .web_site_name
+                .as_deref()
+                .unwrap_or("")
+                .replace('"', "\"\"");
+            let web_domain = ev
+                .web_domain
+                .as_deref()
+                .unwrap_or("")
+                .replace('"', "\"\"");
             csv.push_str(&format!(
-                "{},{},{},{},\"{}\",\"{}\",\"{}\",\"{}\"\n",
+                "{},{},{},{},\"{}\",\"{}\",\"{}\",\"{}\",\"{}\",\"{}\"\n",
                 ev.date,
                 ev.start_time_label,
                 ev.end_time_label,
@@ -416,6 +430,8 @@ pub fn export_usage_report(
                 name,
                 proc_name,
                 ev.category.label(),
+                web_name,
+                web_domain,
                 title
             ));
         }

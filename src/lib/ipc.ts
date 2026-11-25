@@ -9,9 +9,12 @@ import type {
   DashboardAnalyticsDto,
   ExportResultDto,
   LiveStatusDto,
+  SessionEventDto,
   SwimlaneSegmentDto,
+  WebAnalyticsDto,
+  WebCategory,
 } from "../types";
-import { CATEGORY_MAP } from "../types";
+import { CATEGORY_MAP, WEB_CATEGORY_LIST } from "../types";
 import { formatDateISO, shiftDateISO } from "./format";
 
 export function isTauriRuntime(): boolean {
@@ -26,6 +29,7 @@ let previewSettings: AppSettings = {
   minimize_to_tray_on_close: true,
   launch_at_startup: false,
   track_self: false,
+  web_tracking_enabled: true,
   theme: "light",
 };
 
@@ -217,25 +221,57 @@ function buildPreviewAnalytics(range: string, date: string | null, demoMode: boo
   const selectedDate = date || (range === "yesterday" ? shiftDateISO(todayStr, -1) : todayStr);
   const dayBase = Math.floor(new Date(`${selectedDate}T00:00:00`).getTime() / 1000);
 
-  const blocks: Array<[string, number, number, string]> = [
+  const blocks: Array<[string, number, number, string, { site_id: string; site_name: string; domain: string; cat: WebCategory }?]> = [
     ["tencent.weixin", 8 * 60 + 50, 18, "工作群消息与日程同步"],
-    ["citrolabs.ego", 9 * 60 + 10, 26, "架构资料检索与参考"],
+    [
+      "citrolabs.ego",
+      9 * 60 + 10,
+      16,
+      "tauri-apps/tauri: Build desktop apps with Rust",
+      { site_id: "web.github", site_name: "GitHub", domain: "github.com", cat: "dev_tech" },
+    ],
+    [
+      "citrolabs.ego",
+      9 * 60 + 27,
+      10,
+      "Rust Win32 UI Automation 工程实践",
+      { site_id: "web.juejin", site_name: "稀土掘金", domain: "juejin.cn", cat: "dev_tech" },
+    ],
     ["google.antigravity", 9 * 60 + 38, 72, "prism-time — Rust 后端与接口设计"],
     ["openai.codex", 10 * 60 + 52, 24, "Win32 探测与单元测试生成"],
     ["tencent.weixin", 11 * 60 + 20, 14, "午间团队消息确认"],
     ["kingsoft.wps", 13 * 60 + 45, 35, "桌面端视觉设计规格整理"],
     ["google.antigravity", 14 * 60 + 22, 72, "图表组件与时段切片联调"],
-    ["citrolabs.ego", 15 * 60 + 38, 30, "SVG 交互动画调优"],
+    [
+      "citrolabs.ego",
+      15 * 60 + 38,
+      16,
+      "澄镜本地预览调试",
+      { site_id: "web.localhost", site_name: "本地开发预览", domain: "localhost:1420", cat: "dev_tech" },
+    ],
+    [
+      "citrolabs.ego",
+      15 * 60 + 55,
+      14,
+      "Chart Layout Spec — UI 图标规范",
+      { site_id: "web.figma", site_name: "Figma", domain: "figma.com", cat: "docs_work" },
+    ],
     ["adobe.photoshop", 16 * 60 + 12, 42, "软件图标与栅格切图导出"],
     ["openai.codex", 16 * 60 + 58, 29, "自动化编译回归检查"],
     ["tencent.weixin", 19 * 60 + 25, 16, "晚间消息互动"],
     ["folia.music", 19 * 60 + 48, 48, "沉浸式全屏歌词音乐播放"],
     ["valve.steam", 20 * 60 + 42, 54, "晚间休闲游戏时段"],
-    ["citrolabs.ego", 21 * 60 + 42, 19, "晚间技术文章阅读"],
+    [
+      "citrolabs.ego",
+      21 * 60 + 42,
+      19,
+      "现代桌面开发效率讨论",
+      { site_id: "web.zhihu", site_name: "知乎", domain: "zhihu.com", cat: "social_forum" },
+    ],
   ];
 
   const mult = range === "7d" ? 6.4 : range === "30d" ? 26.8 : 1;
-  const segments: SwimlaneSegmentDto[] = blocks.map(([aid, startMin, durMin, title]) => {
+  const segments: Array<SwimlaneSegmentDto & { web?: { site_id: string; site_name: string; domain: string; cat: WebCategory } }> = blocks.map(([aid, startMin, durMin, title, web]) => {
     const app = previewCatalog.find((a) => a.app_id === aid)!;
     const endMin = startMin + durMin;
     const sh = Math.floor(startMin / 60);
@@ -254,6 +290,7 @@ function buildPreviewAnalytics(range: string, date: string | null, demoMode: boo
       start_label: `${String(sh).padStart(2, "0")}:${String(sm).padStart(2, "0")}`,
       end_label: `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`,
       sample_title: title,
+      web,
     };
   });
 
@@ -410,7 +447,7 @@ function buildPreviewAnalytics(range: string, date: string | null, demoMode: boo
     };
   });
 
-  const recentSessions = [...segments]
+  const recentSessions: SessionEventDto[] = [...segments]
     .reverse()
     .map((s, idx) => {
       const app = previewCatalog.find((a) => a.app_id === s.app_id);
@@ -428,8 +465,136 @@ function buildPreviewAnalytics(range: string, date: string | null, demoMode: boo
         end_time_label: `${s.end_label}:00`,
         duration_secs: s.duration_secs,
         sample_title: s.sample_title,
+        web_site_id: s.web?.site_id ?? null,
+        web_site_name: s.web?.site_name ?? null,
+        web_domain: s.web?.domain ?? null,
+        web_category: s.web?.cat ?? null,
       };
     });
+
+  // Preview Web Analytics
+  const webSegments = segments.filter((s) => Boolean(s.web));
+  const webTotalSecs = Math.round(webSegments.reduce((acc, s) => acc + s.duration_secs * mult, 0));
+  const webSiteMap = new Map<string, {
+    site_id: string;
+    display_name: string;
+    domain: string;
+    category: WebCategory;
+    total_secs: number;
+    session_count: number;
+    browsers: Set<string>;
+    ranges: string[];
+    last_seen_ts: number;
+  }>();
+  const webCatMap: Partial<Record<WebCategory, { secs: number; sites: Set<string> }>> = {};
+
+  for (const s of webSegments) {
+    const w = s.web!;
+    const secs = Math.round(s.duration_secs * mult);
+    const existing = webSiteMap.get(w.site_id) || {
+      site_id: w.site_id,
+      display_name: w.site_name,
+      domain: w.domain,
+      category: w.cat,
+      total_secs: 0,
+      session_count: 0,
+      browsers: new Set<string>(),
+      ranges: [],
+      last_seen_ts: s.end_ts,
+    };
+    existing.total_secs += secs;
+    existing.session_count += 1;
+    existing.browsers.add(s.display_name);
+    existing.ranges.push(`${s.start_label}-${s.end_label}`);
+    existing.last_seen_ts = Math.max(existing.last_seen_ts, s.end_ts);
+    webSiteMap.set(w.site_id, existing);
+
+    const wc = webCatMap[w.cat] || { secs: 0, sites: new Set<string>() };
+    wc.secs += secs;
+    wc.sites.add(w.site_id);
+    webCatMap[w.cat] = wc;
+  }
+
+  const webSites = Array.from(webSiteMap.values())
+    .map((item) => ({
+      site_id: item.site_id,
+      display_name: item.display_name,
+      domain: item.domain,
+      category: item.category,
+      total_secs: item.total_secs,
+      percentage: webTotalSecs > 0 ? Math.round((item.total_secs / webTotalSecs) * 1000) / 10 : 0,
+      session_count: item.session_count,
+      browsers: Array.from(item.browsers),
+      active_ranges_preview: item.ranges.slice(0, 4),
+      last_seen_ts: item.last_seen_ts,
+    }))
+    .sort((a, b) => b.total_secs - a.total_secs);
+
+  const webCategories = WEB_CATEGORY_LIST.filter((m) => (webCatMap[m.id]?.secs || 0) > 0)
+    .map((m) => {
+      const entry = webCatMap[m.id]!;
+      return {
+        category: m.id,
+        label: m.label,
+        color: m.color,
+        total_secs: entry.secs,
+        percentage: webTotalSecs > 0 ? Math.round((entry.secs / webTotalSecs) * 1000) / 10 : 0,
+        site_count: entry.sites.size,
+      };
+    })
+    .sort((a, b) => b.total_secs - a.total_secs);
+
+  const webHourly = Array.from({ length: 24 }, (_, h) => {
+    const hs = h * 60;
+    const he = (h + 1) * 60;
+    const byCat: Partial<Record<WebCategory, number>> = {};
+    const siteAcc: Record<string, number> = {};
+    let total = 0;
+    for (const seg of webSegments) {
+      const ov = Math.min(seg.end_minute_of_day, he) - Math.max(seg.start_minute_of_day, hs);
+      if (ov > 0 && seg.web) {
+        const secs = Math.round(ov * 60 * mult);
+        total += secs;
+        byCat[seg.web.cat] = (byCat[seg.web.cat] || 0) + secs;
+        siteAcc[seg.web.site_id] = (siteAcc[seg.web.site_id] || 0) + secs;
+      }
+    }
+    const topSites = Object.entries(siteAcc)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+      .map(([sid, secs]) => {
+        const meta = webSiteMap.get(sid)!;
+        return {
+          site_id: sid,
+          display_name: meta.display_name,
+          category: meta.category,
+          duration_secs: secs,
+        };
+      });
+    return {
+      hour: h,
+      label: `${String(h).padStart(2, "0")}:00`,
+      total_secs: total,
+      by_category: byCat,
+      top_sites: topSites,
+    };
+  });
+
+  const webAnalytics: WebAnalyticsDto = {
+    total_secs: webTotalSecs,
+    share_of_screen_pct: totalSecs > 0 ? Math.round((webTotalSecs / totalSecs) * 1000) / 10 : 0,
+    active_site_count: webSites.length,
+    session_count: webSegments.length,
+    top_site_name: webSites[0]?.display_name ?? null,
+    top_site_domain: webSites[0]?.domain ?? null,
+    top_site_secs: webSites[0]?.total_secs ?? 0,
+    dominant_category: webCategories[0] ?? null,
+    categories: webCategories,
+    browsers: webTotalSecs > 0 ? [{ app_id: "citrolabs.ego", display_name: "Ego Browser", icon_data_url: null, total_secs: webTotalSecs, percentage: 100 }] : [],
+    hourly: webHourly,
+    sites: webSites,
+    recent_web_sessions: recentSessions.filter((ev) => Boolean(ev.web_site_id)),
+  };
 
   return {
     range,
@@ -461,6 +626,7 @@ function buildPreviewAnalytics(range: string, date: string | null, demoMode: boo
     daily_trend: dailyTrend,
     top_apps: topApps,
     recent_sessions: recentSessions,
+    web_analytics: webAnalytics,
   };
 }
 
@@ -476,6 +642,8 @@ export async function fetchLiveStatus(): Promise<LiveStatusDto> {
       current_category: "dev",
       current_category_label: "研发与终端",
       current_icon_data_url: null,
+      current_web_site: null,
+      current_web_domain: null,
       current_session_secs: 1842,
       today_total_secs: 29700,
       idle_secs: 4,

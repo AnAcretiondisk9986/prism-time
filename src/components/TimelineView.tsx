@@ -37,6 +37,8 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
       (s) =>
         s.display_name.toLowerCase().includes(q) ||
         (s.process_name || "").toLowerCase().includes(q) ||
+        (s.web_site_name || "").toLowerCase().includes(q) ||
+        (s.web_domain || "").toLowerCase().includes(q) ||
         CATEGORY_MAP[s.category].label.toLowerCase().includes(q) ||
         (s.sample_title || "").toLowerCase().includes(q),
     );
@@ -206,7 +208,7 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
                       size={28}
                     />
                     <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className="text-[13px] font-medium text-[var(--text-primary)] group-hover:text-[var(--accent)] truncate">
                           {ev.display_name}
                         </span>
@@ -219,6 +221,14 @@ export const TimelineView: React.FC<TimelineViewProps> = ({
                         >
                           {cat.shortLabel}
                         </span>
+                        {ev.web_site_name && (
+                          <span
+                            title={ev.web_domain || undefined}
+                            className="px-2 py-0.5 rounded-md bg-[var(--accent-soft)] text-[var(--accent)] text-[10.5px] font-medium shrink-0"
+                          >
+                            {ev.web_site_name}
+                          </span>
+                        )}
                       </div>
                       {ev.sample_title && (
                         <p className="text-[11px] text-[var(--text-muted)] truncate mt-0.5">

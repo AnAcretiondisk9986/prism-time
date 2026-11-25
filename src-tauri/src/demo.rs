@@ -1,6 +1,6 @@
 use crate::analytics::local_day_bounds;
 use crate::catalog::KNOWN_APPS;
-use crate::models::{AppCategory, AppMetadata, UsageSession};
+use crate::models::{AppCategory, AppMetadata, UsageSession, WebCategory};
 use chrono::{Duration, NaiveDate};
 use std::collections::HashMap;
 
@@ -68,64 +68,160 @@ pub fn generate_demo_dataset(
         let mut list = Vec::new();
         let mut seq = 0usize;
 
-        let mut push_block = |app_id: &str, start_hm: (i64, i64), dur_mins: i64, title: &str| {
+        //Deterministic variation per day
+        let wobble = (offset % 5) * 6;
+        let is_weekend = offset % 7 == 5 || offset % 7 == 6;
+
+        let push_block = |list: &mut Vec<UsageSession>,
+                          seq: &mut usize,
+                          app_id: &str,
+                          start_hm: (i64, i64),
+                          dur_mins: i64,
+                          title: &str,
+                          web_info: Option<(&str, &str, &str, WebCategory)>| {
             let st = day_start + start_hm.0 * 3600 + start_hm.1 * 60;
             let dur = dur_mins * 60;
-            seq += 1;
+            *seq += 1;
+            let (ws_id, ws_name, ws_dom, ws_cat) = match web_info {
+                Some((sid, sname, sdom, scat)) => (
+                    Some(sid.to_string()),
+                    Some(sname.to_string()),
+                    Some(sdom.to_string()),
+                    Some(scat),
+                ),
+                None => (None, None, None, None),
+            };
             list.push(UsageSession {
-                id: format!("demo-{}-{seq}", day.format("%Y%m%d")),
+                id: format!("demo-{}-{}", day.format("%Y%m%d"), *seq),
                 app_id: app_id.to_string(),
                 process_name: None,
                 start_ts: st,
                 end_ts: st + dur,
                 duration_secs: dur,
                 sample_title: Some(title.to_string()),
+                web_site_id: ws_id,
+                web_site_name: ws_name,
+                web_domain: ws_dom,
+                web_category: ws_cat,
             });
         };
 
-        //Deterministic variation per day
-        let wobble = (offset % 5) * 6;
-        let is_weekend = offset % 7 == 5 || offset % 7 == 6;
-
         if !is_weekend {
             // Early morning / morning work rhythm
-            push_block(&social_main, (8, 52), 14 + (offset % 4) * 2, "工作群与消息确认");
-            push_block(&browser_main, (9, 8), 26 + wobble / 2, "技术文档与任务检索");
-            push_block(&dev_main, (9, 36), 68 + wobble, "prism-time — 核心架构开发");
-            push_block(&ai_main, (10, 46), 24 + (offset % 3) * 4, "方案评审与代码辅助");
-            push_block(&dev_term, (11, 12), 18, "cargo test & 构建验证");
-            push_block(&social_main, (11, 32), 16, "午间沟通同步");
+            push_block(&mut list, &mut seq, &social_main, (8, 52), 14 + (offset % 4) * 2, "工作群与消息确认", None);
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (9, 8),
+                16 + wobble / 3,
+                "tauri-apps/tauri: Build desktop apps with Rust",
+                Some(("web.github", "GitHub", "github.com", WebCategory::DevTech)),
+            );
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (9, 25),
+                10,
+                "Rust Win32 UI Automation 文档检索",
+                Some(("web.juejin", "稀土掘金", "juejin.cn", WebCategory::DevTech)),
+            );
+            push_block(&mut list, &mut seq, &dev_main, (9, 36), 68 + wobble, "prism-time — 核心架构开发", None);
+            push_block(&mut list, &mut seq, &ai_main, (10, 46), 24 + (offset % 3) * 4, "方案评审与代码辅助", None);
+            push_block(&mut list, &mut seq, &dev_term, (11, 12), 18, "cargo test & 构建验证", None);
+            push_block(&mut list, &mut seq, &social_main, (11, 32), 16, "午间沟通同步", None);
 
             // Afternoon peak
-            push_block(&office_main, (13, 45), 34 + (offset % 3) * 5, "项目规格文档整理");
-            push_block(&dev_main, (14, 22), 76 + wobble, "可视化组件与状态同步");
-            push_block(&browser_main, (15, 42), 28, "前端渲染调试与资料查阅");
-            push_block(&design_main, (16, 15), 42 + (offset % 4) * 4, "界面视觉切图与图标细节");
-            push_block(&ai_main, (17, 02), 29, "自动化测试脚本生成");
-            push_block(&dev_term, (17, 34), 19, "发布检查与本地打包");
+            push_block(&mut list, &mut seq, &office_main, (13, 45), 34 + (offset % 3) * 5, "项目规格文档整理", None);
+            push_block(&mut list, &mut seq, &dev_main, (14, 22), 76 + wobble, "可视化组件与状态同步", None);
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (15, 42),
+                15,
+                "澄镜本地预览调试",
+                Some(("web.localhost", "本地开发预览", "localhost:1420", WebCategory::DevTech)),
+            );
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (15, 58),
+                14,
+                "Chart Layout Spec — UI 图标设计系统",
+                Some(("web.figma", "Figma", "figma.com", WebCategory::DocsWork)),
+            );
+            push_block(&mut list, &mut seq, &design_main, (16, 15), 42 + (offset % 4) * 4, "界面视觉切图与图标细节", None);
+            push_block(&mut list, &mut seq, &ai_main, (17, 02), 29, "自动化测试脚本生成", None);
+            push_block(&mut list, &mut seq, &dev_term, (17, 34), 19, "发布检查与本地打包", None);
 
             // Evening rhythm
-            push_block(&social_main, (19, 25), 22, "晚间消息与好友互动");
-            push_block(&media_main, (19, 52), 48 + wobble, "沉浸影音与音乐播放");
+            push_block(&mut list, &mut seq, &social_main, (19, 25), 22, "晚间消息与好友互动", None);
+            push_block(&mut list, &mut seq, &media_main, (19, 52), 48 + wobble, "沉浸影音与音乐播放", None);
             if offset % 2 == 0 {
-                push_block(&game_main, (20, 48), 54 + (offset % 3) * 10, "晚间休闲游戏时段");
+                push_block(&mut list, &mut seq, &game_main, (20, 48), 54 + (offset % 3) * 10, "晚间休闲游戏时段", None);
             } else {
-                push_block(&office_main, (20, 45), 36, "个人知识库整理与复盘");
+                push_block(&mut list, &mut seq, &office_main, (20, 45), 36, "个人知识库整理与复盘", None);
             }
-            push_block(&browser_main, (21, 50), 27, "资讯阅读");
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (21, 50),
+                17,
+                "Rust 桌面应用工程实践视频",
+                Some(("web.bilibili", "哔哩哔哩", "bilibili.com", WebCategory::VideoStream)),
+            );
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (22, 8),
+                12,
+                "效率工具工作流讨论",
+                Some(("web.zhihu", "知乎", "zhihu.com", WebCategory::SocialForum)),
+            );
             if offset % 3 == 0 {
-                push_block(&dev_main, (22, 22), 34, "开源项目优化");
+                push_block(&mut list, &mut seq, &dev_main, (22, 22), 34, "开源项目优化", None);
             }
         } else {
             // Weekend / relaxed rhythm
-            push_block(&browser_main, (10, 15), 35 + wobble, "周末资讯与社区浏览");
-            push_block(&media_main, (11, 0), 55, "高清视频与音乐欣赏");
-            push_block(&social_main, (13, 30), 24, "聊天与日程安排");
-            push_block(&game_main, (14, 10), 86 + wobble, "沉浸游戏时段");
-            push_block(&design_main, (16, 5), 45, "摄影后期与创意实验");
-            push_block(&ai_main, (17, 10), 28, "AI 创意对话与探索");
-            push_block(&media_main, (20, 15), 72, "晚间影音娱乐");
-            push_block(&social_main, (21, 35), 25, "晚间沟通");
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (10, 15),
+                20 + wobble / 2,
+                "开源周刊与社区热点讨论",
+                Some(("web.zhihu", "知乎", "zhihu.com", WebCategory::SocialForum)),
+            );
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (10, 38),
+                16,
+                "周末论文阅读 · arXiv cs.HC",
+                Some(("web.arxiv", "arXiv", "arxiv.org", WebCategory::DocsWork)),
+            );
+            push_block(&mut list, &mut seq, &media_main, (11, 0), 55, "高清视频与音乐欣赏", None);
+            push_block(&mut list, &mut seq, &social_main, (13, 30), 24, "聊天与日程安排", None);
+            push_block(&mut list, &mut seq, &game_main, (14, 10), 86 + wobble, "沉浸游戏时段", None);
+            push_block(&mut list, &mut seq, &design_main, (16, 5), 45, "摄影后期与创意实验", None);
+            push_block(&mut list, &mut seq, &ai_main, (17, 10), 28, "AI 创意对话与探索", None);
+            push_block(&mut list, &mut seq, &media_main, (20, 15), 72, "晚间影音娱乐", None);
+            push_block(
+                &mut list,
+                &mut seq,
+                &browser_main,
+                (20, 50),
+                22,
+                "创意剪辑与音乐现场回顾",
+                Some(("web.bilibili", "哔哩哔哩", "bilibili.com", WebCategory::VideoStream)),
+            );
+            push_block(&mut list, &mut seq, &social_main, (21, 35), 25, "晚间沟通", None);
         }
 
         // Keep today's demo sessions clipped up to current time? Actually full-day preview lets users immediately inspect all 24h periods!

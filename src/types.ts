@@ -36,6 +36,42 @@ export const CATEGORY_MAP: Record<AppCategory, CategoryMeta> = CATEGORY_LIST.red
   {} as Record<AppCategory, CategoryMeta>,
 );
 
+export type WebCategory =
+  | "dev_tech"
+  | "ai_web"
+  | "video_stream"
+  | "social_forum"
+  | "docs_work"
+  | "search_portal"
+  | "shopping_life"
+  | "browser_internal";
+
+export interface WebCategoryMeta {
+  id: WebCategory;
+  label: string;
+  shortLabel: string;
+  color: string;
+}
+
+export const WEB_CATEGORY_LIST: WebCategoryMeta[] = [
+  { id: "dev_tech", label: "代码与技术", shortLabel: "技术", color: "#4F6BED" },
+  { id: "ai_web", label: "AI 智能平台", shortLabel: "AI 平台", color: "#7C5CFA" },
+  { id: "video_stream", label: "视频与音乐", shortLabel: "影音", color: "#C88A2B" },
+  { id: "social_forum", label: "社交与社区", shortLabel: "社区", color: "#1A9988" },
+  { id: "docs_work", label: "文档与学术", shortLabel: "文档", color: "#2D9469" },
+  { id: "search_portal", label: "搜索与门户", shortLabel: "浏览", color: "#0E8AC8" },
+  { id: "shopping_life", label: "电商与消费", shortLabel: "消费", color: "#D96B43" },
+  { id: "browser_internal", label: "浏览器内置页", shortLabel: "内置页", color: "#64748B" },
+];
+
+export const WEB_CATEGORY_MAP: Record<WebCategory, WebCategoryMeta> = WEB_CATEGORY_LIST.reduce(
+  (acc, item) => {
+    acc[item.id] = item;
+    return acc;
+  },
+  {} as Record<WebCategory, WebCategoryMeta>,
+);
+
 export interface AppMetadata {
   app_id: string;
   display_name: string;
@@ -58,6 +94,7 @@ export interface AppSettings {
   minimize_to_tray_on_close: boolean;
   launch_at_startup: boolean;
   track_self: boolean;
+  web_tracking_enabled: boolean;
   theme: "light" | "dark";
 }
 
@@ -69,6 +106,8 @@ export interface LiveStatusDto {
   current_category: AppCategory | null;
   current_category_label: string | null;
   current_icon_data_url: string | null;
+  current_web_site: string | null;
+  current_web_domain: string | null;
   current_session_secs: number;
   today_total_secs: number;
   idle_secs: number;
@@ -170,6 +209,71 @@ export interface SessionEventDto {
   end_time_label: string;
   duration_secs: number;
   sample_title: string | null;
+  web_site_id: string | null;
+  web_site_name: string | null;
+  web_domain: string | null;
+  web_category: WebCategory | null;
+}
+
+export interface WebCategoryStatDto {
+  category: WebCategory;
+  label: string;
+  color: string;
+  total_secs: number;
+  percentage: number;
+  site_count: number;
+}
+
+export interface BrowserCarrierDto {
+  app_id: string;
+  display_name: string;
+  icon_data_url: string | null;
+  total_secs: number;
+  percentage: number;
+}
+
+export interface WebHourTopSiteDto {
+  site_id: string;
+  display_name: string;
+  category: WebCategory;
+  duration_secs: number;
+}
+
+export interface HourlyWebBucketDto {
+  hour: number;
+  label: string;
+  total_secs: number;
+  by_category: Partial<Record<WebCategory, number>>;
+  top_sites: WebHourTopSiteDto[];
+}
+
+export interface WebSiteSummaryDto {
+  site_id: string;
+  display_name: string;
+  domain: string;
+  category: WebCategory;
+  total_secs: number;
+  percentage: number;
+  session_count: number;
+  browsers: string[];
+  active_ranges_preview: string[];
+  last_seen_ts: number | null;
+}
+
+export interface WebAnalyticsDto {
+  total_secs: number;
+  share_of_screen_pct: number;
+  active_site_count: number;
+  session_count: number;
+  top_site_name: string | null;
+  top_site_domain: string | null;
+  top_site_secs: number;
+  dominant_category: WebCategoryStatDto | null;
+  categories: WebCategoryStatDto[];
+  browsers: BrowserCarrierDto[];
+  hourly: HourlyWebBucketDto[];
+  sites: WebSiteSummaryDto[];
+  recent_web_sessions: SessionEventDto[];
 }
 
 export interface DashboardAnalyticsDto {
@@ -195,6 +299,7 @@ export interface DashboardAnalyticsDto {
   daily_trend: DailyTrendPointDto[];
   top_apps: AppUsageSummaryDto[];
   recent_sessions: SessionEventDto[];
+  web_analytics: WebAnalyticsDto;
 }
 
 export interface AppDetailDto {
@@ -242,5 +347,5 @@ export interface ExportResultDto {
   format: string;
 }
 
-export type NavTab = "overview" | "timeline" | "catalog" | "settings";
+export type NavTab = "overview" | "timeline" | "web" | "catalog" | "settings";
 export type RangeOption = "today" | "yesterday" | "7d" | "30d" | "custom";

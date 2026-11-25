@@ -2516,7 +2516,7 @@ checksum = "925383efa346730478fb4838dbe9137d2a47675ad789c546d150a6e1dd4ab31c"
 
 [[package]]
 name = "prism-time"
-version = "0.1.0-beta"
+version = "0.2.0-dev"
 dependencies = [
  "base64 0.22.1",
  "chrono",

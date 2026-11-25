@@ -1,5 +1,5 @@
 import React from "react";
-import type { AppCategory } from "../types";
+import type { AppCategory, WebCategory } from "../types";
 
 interface IconProps {
   className?: string;
@@ -259,6 +259,92 @@ export const CategorySvgIcon: React.FC<{ category: AppCategory; size?: number; c
           <rect x="13.3" y="4.5" width="6.2" height="6.2" rx="1.6" stroke="currentColor" strokeWidth="1.75" />
           <rect x="4.5" y="13.3" width="6.2" height="6.2" rx="1.6" stroke="currentColor" strokeWidth="1.75" />
           <circle cx="16.4" cy="16.4" r="3.1" stroke="currentColor" strokeWidth="1.75" />
+        </svg>
+      );
+  }
+};
+
+export const WebNavIcon: React.FC<IconProps> = ({ className = "", size = 18, strokeWidth = 1.75 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+    <circle cx="12" cy="12" r="8.2" stroke="currentColor" strokeWidth={strokeWidth} />
+    <ellipse cx="12" cy="12" rx="3.4" ry="8.2" stroke="currentColor" strokeWidth={strokeWidth - 0.2} />
+    <path d="M4.2 12H19.8" stroke="currentColor" strokeWidth={strokeWidth - 0.2} strokeLinecap="round" />
+    <circle cx="17.8" cy="6.2" r="1.6" fill="currentColor" />
+  </svg>
+);
+
+export const WebCategorySvgIcon: React.FC<{ category: WebCategory; size?: number; className?: string }> = ({
+  category,
+  size = 16,
+  className = "",
+}) => {
+  switch (category) {
+    case "dev_tech":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <path d="M8.5 7.5L4 12L8.5 16.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M15.5 7.5L20 12L15.5 16.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M13.5 5.8L10.5 18.2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      );
+    case "ai_web":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <path
+            d="M12 3.8L14.2 9.8L20.2 12L14.2 14.2L12 20.2L9.8 14.2L3.8 12L9.8 9.8L12 3.8Z"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinejoin="round"
+          />
+          <circle cx="12" cy="12" r="1.4" fill="currentColor" />
+        </svg>
+      );
+    case "video_stream":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <rect x="3.5" y="5.5" width="17" height="13" rx="3" stroke="currentColor" strokeWidth="1.75" />
+          <path d="M10.2 9.2L15.2 12L10.2 14.8V9.2Z" stroke="currentColor" strokeWidth="1.65" strokeLinejoin="round" />
+        </svg>
+      );
+    case "social_forum":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <path
+            d="M4.8 6.8C4.8 5.6 5.7 4.7 6.9 4.7H17.1C18.3 4.7 19.2 5.6 19.2 6.8V14.2C19.2 15.4 18.3 16.3 17.1 16.3H10.2L6.2 19.5V16.3H6.9C5.7 16.3 4.8 15.4 4.8 14.2V6.8Z"
+            stroke="currentColor"
+            strokeWidth="1.75"
+            strokeLinejoin="round"
+          />
+          <path d="M8.5 9.5H15.5M8.5 12.6H13" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      );
+    case "docs_work":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <path d="M5 4.8H10.5C11.4 4.8 12 5.4 12 6.3V19.2C12 18.4 11.4 17.8 10.5 17.8H5V4.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+          <path d="M19 4.8H13.5C12.6 4.8 12 5.4 12 6.3V19.2C12 18.4 12.6 17.8 13.5 17.8H19V4.8Z" stroke="currentColor" strokeWidth="1.7" strokeLinejoin="round" />
+        </svg>
+      );
+    case "search_portal":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <circle cx="12" cy="12" r="8" stroke="currentColor" strokeWidth="1.75" />
+          <path d="M14.8 9.2L10.5 10.5L9.2 14.8L13.5 13.5L14.8 9.2Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+        </svg>
+      );
+    case "shopping_life":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <path d="M5.5 8.5H18.5L17.6 19.2H6.4L5.5 8.5Z" stroke="currentColor" strokeWidth="1.75" strokeLinejoin="round" />
+          <path d="M9 8.5V7C9 5.3 10.3 4 12 4C13.7 4 15 5.3 15 7V8.5" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" />
+        </svg>
+      );
+    case "browser_internal":
+      return (
+        <svg width={size} height={size} viewBox="0 0 24 24" fill="none" className={className} aria-hidden="true">
+          <rect x="4" y="5" width="16" height="14" rx="2.6" stroke="currentColor" strokeWidth="1.75" />
+          <path d="M4 9.5H20" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M8.5 14H15.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
         </svg>
       );
   }

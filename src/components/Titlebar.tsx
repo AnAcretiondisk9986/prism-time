@@ -40,7 +40,9 @@ export const Titlebar: React.FC<TitlebarProps> = ({
     if (liveStatus.state === "self") return "当前正在浏览澄镜面板";
     if (liveStatus.state === "desktop") return "桌面待机中";
     if (liveStatus.current_app_name) {
-      return `正在使用 ${liveStatus.current_app_name}`;
+      return liveStatus.current_web_site
+        ? `正在使用 ${liveStatus.current_app_name} · ${liveStatus.current_web_site}`
+        : `正在使用 ${liveStatus.current_app_name}`;
     }
     return "实时监听前台中";
   })();

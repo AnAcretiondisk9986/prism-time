@@ -23,11 +23,13 @@ import {
   OverviewNavIcon,
   SettingsNavIcon,
   TimelineNavIcon,
+  WebNavIcon,
 } from "./components/Icons";
 import { OverviewView } from "./components/OverviewView";
 import { SettingsView } from "./components/SettingsView";
 import { TimelineView } from "./components/TimelineView";
 import { Titlebar } from "./components/Titlebar";
+import { WebInsightsView } from "./components/WebInsightsView";
 
 export function App() {
   const [activeTab, setActiveTab] = useState<NavTab>("overview");
@@ -42,6 +44,7 @@ export function App() {
     minimize_to_tray_on_close: true,
     launch_at_startup: false,
     track_self: false,
+    web_tracking_enabled: true,
     theme: "light",
   });
   const [liveStatus, setLiveStatus] = useState<LiveStatusDto | null>(null);
@@ -131,6 +134,7 @@ export function App() {
   }> = [
     { id: "overview", label: "今日概览", icon: <OverviewNavIcon size={17} /> },
     { id: "timeline", label: "时段趋势", icon: <TimelineNavIcon size={17} /> },
+    { id: "web", label: "网页洞察", icon: <WebNavIcon size={17} /> },
     { id: "catalog", label: "软件识别库", icon: <CatalogNavIcon size={17} /> },
     { id: "settings", label: "监控设置", icon: <SettingsNavIcon size={17} /> },
   ];
@@ -195,6 +199,7 @@ export function App() {
                 onSelectApp={(aid) => setDetailAppId(aid)}
                 onEnableDemo={() => setDemoMode(true)}
                 onGoToTimeline={() => setActiveTab("timeline")}
+                onGoToWeb={() => setActiveTab("web")}
               />
             )}
 
@@ -207,6 +212,15 @@ export function App() {
                 onChangeRange={handleRangeChange}
                 onSelectDate={handleSelectDate}
                 onSelectApp={(aid) => setDetailAppId(aid)}
+              />
+            )}
+
+            {activeTab === "web" && analytics && (
+              <WebInsightsView
+                analytics={analytics}
+                range={range}
+                onChangeRange={handleRangeChange}
+                onEnableDemo={() => setDemoMode(true)}
               />
             )}
 

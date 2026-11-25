@@ -201,6 +201,10 @@ pub fn split_session_by_local_day(session: &UsageSession) -> Vec<(String, UsageS
                     end_ts: cur_end,
                     duration_secs: cur_end - cur_start,
                     sample_title: session.sample_title.clone(),
+                    web_site_id: session.web_site_id.clone(),
+                    web_site_name: session.web_site_name.clone(),
+                    web_domain: session.web_domain.clone(),
+                    web_category: session.web_category,
                 },
             ));
         }
@@ -262,6 +266,10 @@ mod tests {
             end_ts,
             duration_secs: end_ts - start_ts,
             sample_title: None,
+            web_site_id: None,
+            web_site_name: None,
+            web_domain: None,
+            web_category: None,
         };
 
         let parts = split_session_by_local_day(&session);

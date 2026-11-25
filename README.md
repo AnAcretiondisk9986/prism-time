@@ -3,8 +3,8 @@
   <h1>澄镜 · PrismTime</h1>
   <p>面向 Windows 平台的极简桌面屏幕使用时长、精确时段轨迹与本机软件洞察工具</p>
   <p>
-    <a href="https://github.com/AnAcretiondisk9986/prism-time/releases/tag/V0.1beta">
-      <img src="https://img.shields.io/badge/Version-V0.1beta-3D5AFE?style=flat-square" alt="Version V0.1beta" />
+    <a href="https://github.com/AnAcretiondisk9986/prism-time/releases/tag/V0.2dev">
+      <img src="https://img.shields.io/badge/Version-V0.2dev-3D5AFE?style=flat-square" alt="Version V0.2dev" />
     </a>
     <img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-0F172A?style=flat-square" alt="Windows 10/11 x64" />
     <img src="https://img.shields.io/badge/Stack-Rust%20%2B%20Tauri%20v2%20%2B%20React%2019-4F6BED?style=flat-square" alt="Rust + Tauri v2 + React 19" />
@@ -47,7 +47,8 @@
 - **智能空闲与锁屏感知**：基于 `GetLastInputInfo` 检测键鼠空闲离开，并在播放影音类软件时自动放宽 3 倍空闲阈值；检测到 `Win+L` 锁屏或 UAC 安全桌面时立即暂停并封存当前时段。
 - **跨午夜零点切分**：连续跨日的会话在持久化时严格按照本地自然日边界切分并守恒总时长。
 - **后台断点保护与托盘驻留**：运行期每 15 秒更新活跃检查点以防异常退出丢数据；支持关闭窗口最小化至系统托盘及开机自启配置。
-- **数据检索与报告导出**：支持按关键字检索会话摘要与软件清单，并支持导出 UTF-8 BOM 的 CSV（含软件名称、无拓展名进程名、类别与窗口摘要）与完整分析 JSON 文件。
+- **浏览器内网页识别与站点分流**：支持 Edge、Chrome、Ego Browser、Firefox、Brave、Arc、Vivaldi、Opera、Zen、夸克、360、QQ 浏览器等主流桌面浏览器；通过浅层 UI Automation 地址栏探测与窗口标题启发式双重解析当前站点（仅抽取纯净域名或主机名，自动剥离 URL 路径、Query 参数与令牌），同一浏览器切换不同站点时自动切分独立时段。
+- **数据检索与报告导出**：支持按关键字检索会话摘要、站点域名与软件清单，并支持导出 UTF-8 BOM 的 CSV（含软件名称、无拓展名进程名、类别、访问站点、站点域名与窗口摘要）与完整分析 JSON 文件。
 
 ---
 
@@ -64,6 +65,9 @@
 3. **第三级：构建期未识别程序的无拓展名进程回退**
    - 若前台活跃程序未命中构建期内置百科规则，且不属于系统噪音进程，澄镜不会保留 `.exe` / `.EXE` / `.cmd` / `.scr` 等拓展名，而是直接记录其**去除拓展名后的纯净进程名**（例如 `D:\Tools\PixelBench_x64.exe` 将记录为 `PixelBench_x64`）。
    - 所有未内置识别的进程均可随时在「软件识别库」或「详情抽屉」中进行检索、重命名、更改类别或一键忽略，修改结果持久化至本地 `overrides.json`。
+4. **浏览器内网页与站点识别（`web_catalog.rs`）**
+   - 浅层地址栏探测（仅读取顶层工具栏编辑控件，显式跳过页面渲染容器 `UIA_DocumentControlTypeId`，并按窗口句柄与标题缓存结果以降低 CPU 开销）。
+   - 内置 60+ 主流国内外网站百科，划分「代码与技术」「AI 智能平台」「视频与音乐」「社交与社区」「文档与学术」「搜索与门户」「电商与消费」「浏览器内置页」8 大网页类别；未收录域名按净化后的主机名（如 `wmu.edu.cn`）独立累计。
 
 ---
 
@@ -75,6 +79,7 @@
 - **24 小时分类堆叠柱状图**：按小时刻度展示各类别占比及单小时最活跃软件前三名。
 - **软件类别环形图与高峰窗口**：统计主导软件类别、占比及连续两小时集中度最高的高峰时段。
 - **五时段作息节律与多日趋势矩阵**：划分深夜（`00:00 - 06:00`）、清晨（`06:00 - 09:00`）、上午（`09:00 - 12:00`）、下午（`12:00 - 18:00`）、夜晚（`18:00 - 24:00`），并支持近 7 日与近 30 日趋势交互切换。
+- **网页浏览洞察专属工作区（`WebInsightsView.tsx`）**：汇总浏览器网页总时长与屏幕占比、最常访问网站、24 小时网页内容分布柱状图、8 类网页题材环形图、宿主浏览器载体分流、可搜索网站排行榜以及精确到站点切换的访问明细流。
 - **单软件时段洞察抽屉**：点击任意软件条目即可展开单软件当日 24 小时分布、单次最长/平均停留时长与按时间倒序的精确时段明细。
 
 ---
@@ -97,7 +102,8 @@
 │   │   ├── OverviewView.tsx
 │   │   ├── SettingsView.tsx
 │   │   ├── TimelineView.tsx
-│   │   └── Titlebar.tsx
+│   │   ├── Titlebar.tsx
+│   │   └── WebInsightsView.tsx
 │   ├── lib/
 │   │   ├── format.ts
 │   │   └── ipc.ts
@@ -117,7 +123,8 @@
 │   │   ├── models.rs
 │   │   ├── scanner.rs               # Windows 注册表已安装软件扫描
 │   │   ├── storage.rs               # 按日分片 JSONL 落盘与原子状态读写
-│   │   └── win_probe.rs             # Win32 前台窗体、PE 版本信息与图标提取
+│   │   ├── web_catalog.rs           # 主流网站百科、隐私域名净化与标题识别
+│   │   └── win_probe.rs             # Win32 前台窗体、浅层 UIA 地址栏与图标提取
 │   ├── tools/
 │   │   └── dlltool_shim.rs          # 纯 Rust GNU COFF 导入库构建垫片
 │   ├── vendor/
@@ -135,7 +142,7 @@
 
 ### 方式一：直接运行发布包（推荐）
 
-1. 前往 [Releases (`V0.1beta`)](https://github.com/AnAcretiondisk9986/prism-time/releases/tag/V0.1beta) 下载便携压缩包 `PrismTime-V0.1beta-windows-x64.zip`。
+1. 前往 [Releases (`V0.2dev`)](https://github.com/AnAcretiondisk9986/prism-time/releases/tag/V0.2dev) 下载便携压缩包 `PrismTime-V0.2dev-windows-x64.zip`。
 2. 解压至本地任意目录（请保持 `prism-time.exe` 与 `WebView2Loader.dll` 处于同一目录下）。
 3. 双击 `prism-time.exe` 即可启动使用。
    - 运行依赖 Windows 10 / 11（64 位）及 Microsoft Edge WebView2 运行时（现代 Windows 11 系统已内置）。
@@ -180,6 +187,12 @@ cargo test --manifest-path .\src-tauri\Cargo.toml
 ---
 
 ## 版本记录
+
+### V0.2dev (`0.2.0-dev`)
+
+- 新增主流浏览器内网页识别与统计引擎（支持 Edge、Chrome、Ego Browser、Firefox、Brave、Arc、Vivaldi、Opera、Zen、夸克、360、QQ 浏览器等）。
+- 实现低开销浅层 Win32 UI Automation 地址栏探测与窗口标题双重回退机制，仅采集净化后的域名/主机名并自动剥离路径与查询参数；支持同一浏览器切换网站自动切分时段。
+- 新增「网页洞察」工作区（24 小时网页分布柱状图、8 类内容环形图、宿主浏览器载体分流、网站排行榜及明细流），并在概览速览、时间线徽章、标题栏实时状态、监控开关与 CSV 导出全面集成。
 
 ### V0.1beta (`0.1.0-beta`)
 
