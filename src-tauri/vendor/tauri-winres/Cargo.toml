@@ -1,0 +1,16 @@
+[package]
+edition = "2021"
+rust-version = "1.76"
+name = "tauri-winres"
+version = "0.3.7"
+description = "Create and set windows icons and metadata for executables (with pure Rust COFF .rsrc fallback)"
+license = "MIT"
+
+[lib]
+name = "tauri_winres"
+path = "src/lib.rs"
+
+[dependencies]
+dunce = "1"
+embed-resource = "3"
+toml = "1.0"

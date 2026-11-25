@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+:root,
+[data-theme="light"] {
+  --bg-canvas: #f6f6f4;
+  --bg-sidebar: #efefec;
+  --bg-surface: #ffffff;
+  --bg-subtle: #f2f2ef;
+  --bg-hover: #e9e9e5;
+  --border-hairline: rgba(15, 23, 42, 0.075);
+  --border-strong: rgba(15, 23, 42, 0.14);
+  --text-primary: #111315;
+  --text-secondary: #5e646e;
+  --text-muted: #8e95a0;
+  --accent: #3d5afe;
+  --accent-soft: rgba(61, 90, 254, 0.085);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.03), 0 6px 18px rgba(15, 23, 42, 0.025);
+  --shadow-popover: 0 10px 30px rgba(15, 23, 42, 0.1);
+  --status-ok: #109e70;
+  --status-warn: #c7851c;
+  --status-muted: #7b8391;
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --bg-canvas: #0c0d10;
+  --bg-sidebar: #101216;
+  --bg-surface: #15181e;
+  --bg-subtle: #1b1f27;
+  --bg-hover: #232833;
+  --border-hairline: rgba(255, 255, 255, 0.075);
+  --border-strong: rgba(255, 255, 255, 0.15);
+  --text-primary: #f2f4f7;
+  --text-secondary: #9aa2ae;
+  --text-muted: #656e7b;
+  --accent: #6d87ff;
+  --accent-soft: rgba(109, 135, 255, 0.13);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.35), 0 8px 24px rgba(0, 0, 0, 0.2);
+  --shadow-popover: 0 14px 36px rgba(0, 0, 0, 0.52);
+  --status-ok: #26c28f;
+  --status-warn: #e2a23b;
+  --status-muted: #767f8e;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background: var(--bg-canvas);
+  color: var(--text-primary);
+  font-family:
+    "Inter",
+    "PingFang SC",
+    "Microsoft YaHei UI",
+    "Segoe UI",
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  user-select: none;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.card-surface {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-hairline);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+.scroll-area {
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+
+.scroll-area::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scroll-area::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scroll-area::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+}
+
+.scroll-area::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+}
+
+@keyframes subtlePulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.45;
+    transform: scale(0.88);
+  }
+}
+
+.live-dot {
+  animation: subtlePulse 2.2s ease-in-out infinite;
+}
